@@ -1,0 +1,313 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+
+nls_clean <- read_csv("~/Stats_316_F24/Project/DR_MB/nls_clean.csv") %>% mutate(na.prop = rowMeans(is.na(nls_clean))) 
+
+nls_clean %>% group_by(PUBID) 
+
+nls_clean2 <- nls_clean
+# Loop through each row
+for (row in 1:nrow(nls_clean2)) {
+  # Identify the columns 20 to 39 in the current row
+  row_values <- nls_clean2[row, 20:39]
+  
+  # Find the position of the first non-NA and non-"Never Married" value
+  first_non_na_non_never_married <- which(!(is.na(row_values) | row_values == "Never Married"))[1]
+  
+  # If we found a non-NA/non-"Never Married" value, continue
+  if (!is.na(first_non_na_non_never_married)) {
+    # Get all the "Never Married" values up to the first non-"Never Married" or non-NA value
+    never_married_indices <- which(row_values[1:(first_non_na_non_never_married - 1)] == "Never Married")
+    
+    # Check if we found any "Never Married" before the first non-"Never Married"
+    if (length(never_married_indices) > 0) {
+      # Identify the last "Never Married" position before the first non-"Never Married" value
+      last_never_married_col <- max(never_married_indices)
+      
+      # Ensure we don't go beyond column 39 (max is column 39, so the index should be between 20 and 39)
+      last_never_married_col <- min(last_never_married_col, 20 + 19) # Enforces a max of column 39
+      
+      # Update the NA columns up to the last "Never Married"
+      row_values[1:last_never_married_col][is.na(row_values[1:last_never_married_col])] <- "Never Married"
+      
+      # Assign the updated row values back to the data frame
+      nls_clean2[row, 20:39] <- row_values
+    }
+  }
+}
+nls_clean2
+
+
+```
+
+
+```{r}
+#Pivot_longer code from Donovan
+nls_long <-nls_clean %>%
+    relocate(PUBID) %>%
+    pivot_longer(cols = matches("[0-9]{4}$"), names_to = c(".value","year"), names_pattern = "(.*)([0-9]{4}$)" ) %>%
+  relocate(year) %>% #Creates new "year" variable, and attaches corresponding columns to it 
+  mutate(year = as.numeric(year),
+         year_since_1997 = year - 1997,
+         age = year - Birth_Year,
+         Puberty_age = ifelse) %>%
+select(1:10, 29:36, 38, everything())
+  
+#Interp
+nls_interp <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age varaible
+  group_by(PUBID)|>
+  arrange(year)|>
+  filter(any(!is.na(NUM_PARTNERS_SINCE_DLI)))|> # removes people who do not have any recorded sexual partner data
+  #mutate(NUM_PARTNERS_SINCE_DLI = ifelse(is.na(NUM_PARTNERS_SINCE_DLI), 0, NUM_PARTNERS_SINCE_DLI))|> # 
+  fill(SEX_SINCE_DLI, .direction = "downup")|>
+  fill(Avg_GPA, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 2 variable
+  fill(Region, .direction = "downup")|>#fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable.
+  fill(Sex, .direction = "downup")|>
+  fill(Marriage_Status, .direction = "downup")|>
+  fill(Ethnicity, .direction = "downup")|>
+  fill(Race, .direction = "downup")|>
+  fill(Rural_Urban, .direction = "downup")|>
+  fill(NUM_PARTNERS_SINCE_DLI, .direction = "downup")|>
+  arrange(PUBID) %>% 
+  ungroup()
+
+
+nls_long %>%
+  arrange(PUBID, year) %>%
+  group_by(PUBID) %>%
+  mutate(
+    # Check for the earliest valid year (SEX_SINCE_DLI not NA)
+    earliest_valid_year = if_else(
+      any(!is.na(SEX_SINCE_DLI)),  # If there are valid SEX_SINCE_DLI entries
+      min(year[!is.na(SEX_SINCE_DLI)], na.rm = TRUE),
+      NA  # Otherwise, set to NA if no valid entries exist
+    ),
+    
+    # Flag to check if there is any valid SEX_SINCE_DLI for this PUBID
+    has_valid_sex_since_dli = any(!is.na(SEX_SINCE_DLI), na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # For the first valid year, set DLI_Time to 1
+    DLI_Time = if_else(
+      is.na(SEX_SINCE_DLI),
+      NA,  # If SEX_SINCE_DLI is NA, set DLI_Time to NA
+      if_else(
+        year == earliest_valid_year & !is.na(SEX_SINCE_DLI),
+        1,  # For the first valid year, set DLI_Time to 1
+        NA  # Temporarily set to NA for all other rows
+      )
+    )
+  ) %>%
+  group_by(PUBID) %>%
+  mutate(
+    # Compute the most recent year with valid SEX_SINCE_DLI using zoo::na.locf()
+    most_recent_year = if_else(
+      has_valid_sex_since_dli,  # Only compute most_recent_year if valid SEX_SINCE_DLI exists
+      zoo::na.locf(if_else(!is.na(SEX_SINCE_DLI), year, NA_integer_), fromLast = TRUE),
+      NA_integer_  # If no valid SEX_SINCE_DLI, set most_recent_year to NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    # Compute the DLI_Time difference for valid SEX_SINCE_DLI rows
+    DLI_Time = if_else(
+      !is.na(SEX_SINCE_DLI),
+      year - most_recent_year,
+      DLI_Time  # Keep existing DLI_Time value if SEX_SINCE_DLI is valid
+    )
+  ) %>%
+  # If no valid SEX_SINCE_DLI exists for the PUBID, set DLI_Time to NA for all rows of that PUBID
+  mutate(DLI_Time = if_else(!has_valid_sex_since_dli, NA_real_, DLI_Time)) %>%
+  select(-most_recent_year)  # Remove temporary most_recent_year column
+```
+
+SEX_SINCE_DLI EDA
+```{r}
+nls_long %>% ggplot(aes(x = SEX_SINCE_DLI)) + geom_histogram()
+nls_long %>% ggplot(aes(x = SEX_SINCE_DLI, fill = Sex)) + geom_histogram(binwidth = 10, position = "dodge")
+nls_long %>% ggplot() + geom_density(aes(x = SEX_SINCE_DLI, color = Sex)) + 
+  geom_vline(xintercept = 100) +
+  geom_vline(xintercept = 200) +
+  geom_vline(xintercept = 300) +
+  geom_vline(xintercept = 400) +
+  geom_vline(xintercept = 500) +
+  geom_vline(xintercept = 1000) #Vertical lines denote multiples of 100, to show that peaks are near round numbers
+
+nls_long %>% ggplot(alpha= 0.2) + geom_point(aes(x = SEX_SINCE_DLI, y = Avg_GPA, color = Sex), size = 0.2, alpha = 0.2) + 
+  geom_vline(xintercept = 100) +
+  geom_vline(xintercept = 200) +
+  geom_vline(xintercept = 300) +
+  geom_vline(xintercept = 400) +
+  geom_vline(xintercept = 500) +
+  geom_vline(xintercept = 1000) #Vertical lines denote multiples of 100, to show that peaks are near round numbers
+
+nls_long %>% ggplot(alpha= 0.2) + geom_point(aes(x = SEX_SINCE_DLI, y = Avg_GPA, color = Sex), size = 0.2, alpha = 0.2)  #Vertical lines denote multiples of 100, to show that peaks are near round numbers
+
+#I explored other relationships, but none were interesting. Either little change was apparent, or the graph was too cluttered to easily make sense of. 
+nls_interp %>% ggplot() + geom_density(aes(x = SEX_SINCE_DLI, color = Ethnicity))
+
+
+#SEX_SINCE_DLI vs HS GPA
+nls_long %>% ggplot(aes(x = SEX_SINCE_DLI, y = Avg_GPA)) + geom_point(size = 0.2, alpha = 0.2) + geom_smooth() + geom_smooth(method = "lm", color = "red")
+
+#Zoomed in to SEX_SINCE_DLI < 250
+nls_long %>% filter(SEX_SINCE_DLI < 250) %>% ggplot(aes(x = SEX_SINCE_DLI, y = Avg_GPA)) + geom_point(size = 0.2, alpha = 0.2) + geom_smooth() + geom_smooth(method = "lm", color = "red")
+```
+
+```{r}
+SumSSD <- function(var) {
+  nls_long %>% group_by({{var}}) %>% summarise(SSD_mean = mean(SEX_SINCE_DLI, na.rm = TRUE), SSD_sd = sd(SEX_SINCE_DLI, na.rm = TRUE), n = n())
+}
+SumSSD(Sex)
+SumSSD(Race)
+SumSSD(Ethnicity)
+SumSSD(Region)
+SumSSD(Rural_Urban)
+SumSSD(Marriage_Status)
+SumSSD(Avg_GPA = round(Avg_GPA, 0))
+
+```
+
+```{r}
+with(
+  nls_long, 
+  t.test(SEX_SINCE_DLI[Rural_Urban == "Rural"], SEX_SINCE_DLI[Rural_Urban == "Urban"])
+) #Testing significance of Rural vs Urban sex-- p-value is 0.297
+
+nls_long %>% group_by(Region, Rural_Urban) %>% 
+  summarise(median = median(SEX_SINCE_DLI, na.rm = TRUE), sd= sd(SEX_SINCE_DLI, na.rm = TRUE), n = n()) %>% 
+  ggplot() + geom_point(aes(x = median, y = sd, color = Region, shape = Rural_Urban, size = n)) + 
+  scale_x_continuous(limits = c(25,75)) +
+  scale_y_continuous(limits = c(150, 225))
+```
+
+# Graphs and Models
+
+```{r}
+nls_long %>% mutate(is.unmarried = Marriage_Status == "Never Married", 
+                    )
+
+nls_long %>% ggplot(aes(y = SEX_SINCE_DLI, x = Avg_GPA)) + 
+  geom_point(size = 0.2, alpha = 0.2) + 
+  geom_smooth() + 
+  geom_smooth(method = "lm", color = "red") +
+  theme_bw()+
+  labs(title = "Sex Frequency versus High School GPA",
+         subtitle = "Amount of Sex since Last Interview vs Average GPA",
+       y = "Number of Sexual Encounters since Last Interview",
+       x = "Average High School GPA")
+
+
+#Imperfect LM because the points are not independent; need lmer for this
+nls_fil1 <-nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA))
+
+anova(lm(
+  SEX_SINCE_DLI ~ Avg_GPA, data = nls_fil1), 
+  lm(SEX_SINCE_DLI ~ 1, data = nls_fil1))
+
+#Trying again with LMER:
+
+glmer0 <-glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_fil1, family = poisson)
+glmer1 <-glmer(SEX_SINCE_DLI ~ Avg_GPA + (1 | PUBID), data = nls_fil1, family = poisson)
+anova(glmer0, glmer1)
+#Not significant! p-value is 0.37
+
+nls_fil2 <- nls_fil1 %>% filter(!is.na(Region) & !is.na(Rural_Urban) & !is.na(Marriage_Status))
+glmer2 <- glmer(SEX_SINCE_DLI ~ Rural_Urban + Region + Rural_Urban:Region + (1 | PUBID), data = nls_fil1 , family = poisson)
+summary(glmer2)
+
+anova(glmer2, glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_fil2, family = poisson))
+
+#Region and Urban_Rural were each very significant. 
+
+anova(lmer(SEX_SINCE_DLI ~ Avg_GPA + (1 | PUBID), data = nls_fil2, REML = TRUE), 
+      lmer(SEX_SINCE_DLI ~ Rural_Urban + Region + Rural_Urban * Region + Avg_GPA + (1 | PUBID), data = nls_fil2, REML = TRUE))
+
+nls_fil3 <- nls_fil1 %>% filter(!is.na(Sex) & !is.na(Race) & !is.na(Ethnicity)) #27342 people
+
+lmer3 <- glmer(SEX_SINCE_DLI ~ Rural_Urban + Ethnicity + Avg_GPA + (1 | PUBID), data = nls_fil3, family = poisson)
+summary(lmer3)
+
+anova(
+  lmer(SEX_SINCE_DLI ~  Ethnicity + Avg_GPA + (1 | PUBID), data = nls_fil3, REML = TRUE), 
+  lmer(SEX_SINCE_DLI ~ Race  + Ethnicity + Race*Ethnicity + Avg_GPA + (1 | PUBID), data = nls_fil3, REML = TRUE))
+
+#Race by itself is not significant, nor when combined with sex.
+#Ethnicity, on the other hand, is significant. Interaction term is not significant compared to race and ethnicity separately, or just ethnicity. 
+
+
+#Significant terms so far: Avg_GPA, Rural_Urban, Ethnicity
+
+ #27237 people
+anova(
+  #lmer(SEX_SINCE_DLI ~  Ethnicity + Avg_GPA + (1 | PUBID), data = nls_fil4, REML = TRUE),
+  lmer(SEX_SINCE_DLI ~  Ethnicity + Rural_Urban + Avg_GPA + (1 | PUBID), data = nls_fil4, REML = TRUE),
+  lmer(SEX_SINCE_DLI ~  Rural_Urban + Avg_GPA + (1 | PUBID), data = nls_fil4, REML = TRUE),
+  lmer(SEX_SINCE_DLI ~  Avg_GPA + (1 | PUBID), data = nls_fil4, REML = TRUE))
+#Ethnicity and Rural_Urban are significant individually and together. 
+
+summary(lmer(SEX_SINCE_DLI ~  Ethnicity + Rural_Urban + Avg_GPA + (1 | PUBID), data = nls_fil4, REML = TRUE))
+
+summary(glmer(SEX_SINCE_DLI ~  Race + (1 | PUBID), data = nls_fil3, family = poisson))
+
+nls_fil4 <- nls_fil3 %>% filter(!is.na(AGE_FIRST_SEX) & !is.na(age) & !is.na(Puberty_age)) #28100 people
+
+summary(glmer(SEX_SINCE_DLI ~  AGE_FIRST_SEX + (1 | PUBID), data = nls_fil4, family = poisson))
+
+anova(glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_fil4, family = poisson),
+      glmer(SEX_SINCE_DLI ~  Ethnicity +  Rural_Urban + Region + Sex + (1 | PUBID), data = nls_fil4, family = poisson))
+
+summary(glmer(SEX_SINCE_DLI ~ Race + Ethnicity + Marriage_Status + Rural_Urban + Region + Sex + age + Puberty_age + (1 | PUBID), data = nls_fil4, family = poisson))
+```
+
+
+copied code from Technical Report:
+```{r}
+#Avg_GPA
+
+nls_fil1 <-nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA) & !is.na(age) & !is.na(Marriage_Status))
+nls_SSD_offset <- nls_fil1  %>%
+  drop_na(SEX_SINCE_DLI)%>%
+  group_by(PUBID) %>%
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist))
+
+glmer0 <-glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist)
+glmer1 <-glmer(SEX_SINCE_DLI ~  Avg_GPA + (1 | PUBID), data = nls_SSD_offset, family = poisson)
+anova(glmer0, glmer1)
+#Avg_GPA not significant by itself
+
+
+summary(glmer(SEX_SINCE_DLI ~ Avg_GPA:age + Avg_GPA + age + Marriage_Status + (age | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist))
+#Marginal / Conditional R^2: 0.105 / 0.995
+
+
+nls_SSD_offset_fil2 <- nls_SSD_offset %>% filter(
+    !is.na(Region),
+    !is.na(Rural_Urban),
+    !is.na(Sex),
+    !is.na(Race),
+    !is.na(Ethnicity),
+    !is.na(AGE_FIRST_SEX),
+    !is.na(Puberty_age)
+  )
+
+summary(glmer(SEX_SINCE_DLI ~ Race + Ethnicity + Marriage_Status + Rural_Urban + Region + Sex + age + Puberty_age + year_since_1997 + (1 | PUBID), data = nls_SSD_offset_fil2, family = poisson, offset = interview_dist))
+
+tab_model(glmer(SEX_SINCE_DLI ~ Race + Ethnicity + Marriage_Status + Rural_Urban + Region + Sex + age + Puberty_age + year_since_1997 + (1 | PUBID), data = nls_SSD_offset_fil2, family = poisson, offset = interview_dist))
+
+view(nls_SSD_offset)
+```
+

@@ -1,0 +1,185 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r }
+library(tidyverse)
+
+#new_data was a tibble created by the .R file. For completion:
+
+#nls_data_num <-new_data
+
+#For replicability
+#new_data %>% write.csv("~/Stats_316_F24/Project/DR_MB/nls_data_question")
+nls_data_question <-read.csv("~/Stats_316_F24/Project/DR_MB/Stat_Theory_Data_QName.csv")
+```
+
+Function naming
+```{r }
+years <- c(1997:2011, 2013, 2015, 2017, 2019, 2021) #Vector of commonly used years for column renaming
+#region_names <- paste0("Region", c(1997:2011, 2013:2015, 2017, 2019, 2021))
+
+rename_cols <- function(dataset, label) {
+  # Use a for loop to create new columns with the corresponding year names
+  for (i in 1:length(years)) {
+    col_name <- paste0(label, years[i])
+    dataset[[col_name]] <- dataset[[i]]  # Copy the data from the ith column to the new column
+  }
+  
+  dataset <- dataset %>% select(21:ncol(dataset))  # Select columns from 21 to the last column
+  dataset
+}
+
+yrs_rename_cols <- function(dataset, label, years) {
+  # Use a for loop to create new columns with the corresponding year names
+  for (i in 1:length(years)) {
+    col_name <- paste0(label, years[i])
+    dataset[[col_name]] <- dataset[[i]]  # Copy the data from the ith column to the new column
+  }
+  
+  dataset <- select(dataset, (1 + length(years)):ncol(dataset))  # Select columns from 21 to the last column
+  dataset
+}
+```
+
+Data cleaning code:
+```{r}
+nls_clean <- nls_data_question %>%
+  select(-c(1:7)) %>% #Removing isGPA questions
+  mutate(GPA_avg = if_else(
+      rowSums(!is.na(across(1:7))) == 0,  
+      NA_real_,                             
+      rowMeans(across(1:7), na.rm = TRUE)),
+      GPA_avg = GPA_avg / 100,
+         GPA_schools_count = rowSums(!is.na(across(c(1:7))))) %>% #Creating an average GPA metric
+  select(sort(names(.))) %>% #Alphabetizing for easier cleaning
+  mutate(across(1:20, ~ case_when(
+    . == 1  ~ "Northeast",
+    . == 2  ~ "North Central",
+    . == 3  ~ "South",
+    . == 4  ~ "West",
+    . == -4 ~ "International",
+    TRUE    ~ NA_character_  # Set other values to NA
+  ))) %>%                                               #Coding categorical responses for Region question
+  rename_cols("Region")%>% #Creating duplicate, well-named columns, and deleting originals at the front
+  mutate(across(1:20, ~ case_when( #Changing marriage data names
+    . == 1  ~ "Cohabit",
+    . == 2  ~ "Never Married",
+    . == 3  ~ "Married",
+    . == 4  ~ "Married_NCohab",
+    . == 5  ~ "Separated",
+    . == 6  ~ "Separated_NCohab",
+    . == 7  ~ "Divorced",
+    . == 8  ~ "Divorced_NCohab",
+    . == 9  ~ "Widowed",
+    . == 10 ~ "Widowed_NCohab",
+    TRUE    ~ NA_character_  # Set other values to NA
+  ))) %>% 
+    select(1, 2, 13:20, 3:12, 21:208) %>% #Reordering for replacement
+  rename_cols("Marriage_Status") %>%
+  select(2:208, 1) %>% #Deleting old-named columns
+  mutate(across(1:20, ~ case_when(
+    . == 0  ~ "Rural",
+    . == 1  ~ "Urban",
+    . == 2  ~ "Unknown",
+    TRUE    ~ NA_character_  # Set other values to NA
+  ))) %>%
+  select(1, 2, 13:20, 3:12, 21:208) %>% #Reordering for replacement
+  rename_cols("Rural_Urban") %>%
+  rename("Avg_GPA" = 1,
+        "Birth_Month" = 3,
+         "Birth_Year" = 4,
+         "Race" = 5,
+         "Ethnicity" = 6,
+         "Sex" = 7,
+        "GPA1" = 8,
+        "GPA2" = 9, 
+        "GPA3" = 10,
+        "GPA4" = 11,
+        "GPA5" = 12,
+        "GPA6" =  13, 
+        "GPA7" = 14)%>% 
+  mutate(Birth_Month = recode(
+      .[[3]],
+      `1` = "January",
+      `2` = "February",
+      `3` = "March",
+      `4` = "April",
+      `5` = "May",
+      `6` = "June",
+      `7` = "July",
+      `8` = "August",
+      `9` = "September",
+      `10` = "October",
+      `11` = "November",
+      `12` = "December"
+    ), 
+    Race = recode(
+      .[[5]],
+      `1` = "White",
+      `2` = "Black",
+      `3` = "AmerInd",
+      `4` = "AAPI",
+      `5` = "Other",
+      `0` = "No Information",
+      .default = "Did not respond"), 
+    Ethnicity = recode(
+      .[[6]],
+      `1` = "Not_Hispanic",
+      `2` = "Hispanic",
+      `3` = "Not_Hispanic",
+      `4` = "Not_Hispanic",
+      .default = "Did not respond"),
+    Sex = recode(
+      .[[7]],
+      `1` = "Male",
+      `2` = "Female",
+      `0` = "No Info",
+      .default = "Did not respond"), 
+    ) %>% select(25:29, 69:75, 30:33, 76:80, 34:38, 81:92, 39:43, 93:96, 44:48, 97:104, 49:53, 105:116, 54:58, 117:128, 59:63, 129:138, 64:68, 139:148, 149:208, 1:24) %>% #Reordering for yrs_rename_cols commands later
+   mutate(
+    MALE_PUB_AGE = if_else(
+      rowSums(!is.na(across(1:12))) == 0,  
+      NA_real_,                             
+      rowMeans(across(1:12), na.rm = TRUE)  
+    ),
+    FEMALE_FMP_AGE = if_else(
+      rowSums(!is.na(across(13:21))) == 0,  
+      NA_real_,                             
+      rowMeans(across(13:21), na.rm = TRUE)  
+    )
+  ) %>% #Creating a combination variable for these two level-two metrics. 
+  select(95:109, 22:94, 110:210) %>%
+  yrs_rename_cols("SEX_SINCE_DLI", c(1997:2011)) %>%
+  select(1:7, 10:17, 8:9, 18:189) %>% #Reordering to change (1,10,11,...,2,3,...) alphabetised numbers to numerical order
+  yrs_rename_cols("AGE_FIRST_SEX", c(1997:2011, 2013, 2015)) %>%
+  yrs_rename_cols("NUM_PARTNERS_EVER", c(1997:2005)) %>%
+  yrs_rename_cols("EST_PARTNERS_EVER", c(1997:2005)) %>%
+  yrs_rename_cols("VALIDCHECK_NUM_PARTNERS_EVER", c(1997:2005))%>%
+  yrs_rename_cols("NUM_PARTNERS_SINCE_DLI", c(1997:2011, 2013, 2015)) %>%
+yrs_rename_cols("EST_NUM_PARTNERS_DLI", c(1997:2011, 2013, 2015)) %>%
+  yrs_rename_cols("EST_NUM_SEX_DLI", c(2002:2011)) %>%
+  mutate(AGE_FIRST_SEX = if_else( 
+      rowSums(!is.na(across(102:118))) == 0,  
+      NA_real_,                             
+      rowMeans(across(102:118), na.rm = TRUE)  #Making composite variable for AGE_FIRST_SEX
+    ),      #Adding definition for variable CV_SAMPLE_TYPE
+   #CV_SAMPLE_TYPE = ifelse(CV_SAMPLE_TYPE == 1, "Cross-Sectional", "Over-sample")
+    ) %>%  
+  select(1:101, 119:190) #Deleting old year-variables for AGE_FIRST_SEX
+
+view(nls_clean)
+#Writing CSV code: DO NOT RUN
+#nls_clean %>% write_csv("~/Stats_316_F24/Project/DR_MB/nls_clean.csv")
+```
+
+```{r}
+nls_clean <- read_csv("~/Stats_316_F24/Project/DR_MB/nls_clean.csv")
+view(nls_clean)
+
+sum(is.na(nls_clean)) / (nrow(nls_clean) * ncol(nls_clean)) #Comparing proportion of NAs
+sum(is.na(nls_data_question)) / (nrow(nls_data_question) * ncol(nls_data_question))
+
+```
+

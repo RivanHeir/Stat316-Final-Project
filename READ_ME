@@ -1,0 +1,18 @@
+All relevant documents for this project are in ~/Stats_316_F24/Project/DR_MB
+
+The original data source is "Stat_Theory_Data_QName.csv". This was downloaded from nslinfo.org, and contains all of the data we are currently using, albeit in a very messy format. 
+
+Along with this csv is Stat_Theory_Data_GName.R. Running this R file renamed a lot of the variables, and accomplished some of the more tedious cleaning tasks (shoutout to Katherine for reminding me that this file exists!), yielding "new_data". 
+
+Stat_Project_Code_Cleaning.Rmd read in "new_data", and renamed it to "nls_data_question" (to protect overwriting), and then cleaned this dataset to produce "nls_clean". Both nls_data_question and nls_clean were written into CSVs, as Donovan was struggling to get the code to run (his computer could not read in one particular csv, but could read in others). This also is an added layer of security in case something was messed up. 
+
+Preliminary_Draft.Rmd is the draft of our preliminary report. This contains an overview of our project, variable names and descriptions, and some of our early EDA graphs. 
+
+Project_EDA.Rmd is where most of our experimentation with this EDA has been performed. This is the document in which we will do the majority of the rest of our work on this project. One of the first things we did on this document is to pivot_longer the data, so that we have observations by our level 1 variable (surveys from an individual), rather than a row for each individual, containing many duplicate columns with the same question but different years. This format of the data is what required the most time spent cleaning. 
+
+MB_EDA provides additional EDA, specifically 
+
+MB_EDA.Rmd is a secondary EDA document in which Matthew can work while Donovan is working in Project_EDA, to avoid issues of concurrent saving. 
+
+The datasets and concomitant CSVs move, in order of cleanliness, from Stat_Theory_Data_QName.csv (freshly downloaded) to nls_data_questions.csv (cleaned by downloaded .R file), to nls_clean.csv (cleaned by me), to potentially nls_long.csv (pivoted longer). This final csv has not been written, as there are no access issues yet. Stat_Theory_Data_QName.csv is read in as new_data, but the other datasets match their csv names. 
+

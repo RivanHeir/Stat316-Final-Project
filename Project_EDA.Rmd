@@ -1,0 +1,630 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+
+library(readr)
+library(tidyverse)
+library(mosaic)
+library(lme4)
+library(gt)
+library(knitr)
+library(kableExtra)
+nls_clean <- read_csv("Stats_316_F24/Project/DR_MB/nls_clean.csv")
+nls_clean <- nls_clean %>% mutate(na.prop = rowMeans(is.na(nls_clean))) #looks at proportions of NA variables
+
+# pivots the data longer. Row observational units are PUBID and Year. 
+nls_long<- nls_clean|>
+    relocate(PUBID)|>
+    pivot_longer(cols = matches("[0-9]{4}$"), names_to = c(".value","year"), names_pattern = "(.*)([0-9]{4}$)" )|>
+  relocate(year) 
+  
+#More data cleaning. Interpolating some values as not all respondents responded to interview questions every year
+nls_interp <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  group_by(PUBID)|>
+  arrange(year)|>
+  filter(any(!is.na(NUM_PARTNERS_SINCE_DLI)))|> # removes people who do not have any recorded sexual partner data
+  #mutate(NUM_PARTNERS_SINCE_DLI = ifelse(is.na(NUM_PARTNERS_SINCE_DLI), 0, NUM_PARTNERS_SINCE_DLI))|> # 
+  fill(SEX_SINCE_DLI, .direction = "downup")|>
+  fill(Avg_GPA, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 2 variable, so NA values can be filled.
+  fill(Region, .direction = "downup")|>#fills in Region if missing for each person. AVG_GPA is a level 1 variable.
+  fill(Sex, .direction = "downup")|>#fills in sex if missing for each person. Sex is a level 1 variable.
+  fill(Marriage_Status, .direction = "downup")|> #fills in Marrige if missing for each person. Marriage is a level 1 variable.
+  fill(Ethnicity, .direction = "downup")|> #fills in Ethnicity if missing for each person. Ethnicity is a level 2 variable.
+  fill(Race, .direction = "downup")|> #fills in Race if missing for each person. Race is a level 2 variable.
+  fill(Rural_Urban, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable.
+  fill(NUM_PARTNERS_SINCE_DLI, .direction = "downup")|>#fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable, and a dependent variable.
+  arrange(PUBID)
+
+
+nls_clean %>% ggplot(aes(x = na.prop)) + geom_histogram()
+
+nls_clean %>% summarise(mean_na = mean(na.prop), sd = sd(na.prop))
+
+```
+
+
+# Exploratory Analysis of sexual partners with various covariates
+```{r}
+
+
+favstats(~NUM_PARTNERS_SINCE_DLI, data = nls_interp)
+
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI))+
+  geom_histogram(bins = 30)
+
+#looks distribution of number of sexual partners since last interview by year. 
+
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI))+
+  geom_histogram(bins = 30)+
+  facet_wrap(~year) 
+
+
+#distribution of number of sexual partners since last interview by year, by sex We want to see if there are differences in partners by sex
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, fill = Sex))+
+  geom_histogram(bins = 30, alpha = 0.5)+
+  facet_wrap(~year) 
+#distribution of number of sexual partners since last interview by year, by race
+
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, fill = Race))+
+  geom_histogram(bins = 30, alpha = 0.5)+
+  facet_wrap(~year) 
+#distribution of number of sexual partners since last interview by year, by race
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, fill = Marriage_Status))+
+  geom_histogram(bins = 30, alpha = 0.5)
+#By Race By Year
+nls_interp|>
+  filter(NUM_PARTNERS_SINCE_DLI < 50)|>
+ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, fill = Marriage_Status))+
+  geom_histogram(bins = 30, alpha = 0.5)+
+  facet_wrap(~year) 
+
+# exploring trends in sexual partners over time, looking at different sexes. Looking for differenes based on sex and possible interactions
+nls_interp|>  
+  group_by(year,Region, Sex, Marriage_Status) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot() +
+  geom_line(aes(x=year, y=avg_partner, color= Sex))+
+  facet_wrap(~Marriage_Status)
+
+#trends in sexual partners over time between men and women in different regions. Looking at additional interactions
+nls_interp|>  
+  group_by(year,Region, Sex) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot() +
+  geom_line(aes(x=year, y=avg_partner, color= Sex))+
+  facet_wrap(~Region)
+
+##trends in sexual partners over time for different marriage statuses in different regions. Looking at possible interactions
+nls_interp|>  
+  group_by(year,Region, Marriage_Status) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot() +
+  geom_line(aes(x=year, y=avg_partner, color= Marriage_Status))+
+  facet_wrap(~Region)+
+  theme_bw()
+
+#trends in sexual partners overtime for those with high compared to low average GPAs
+
+#Distribution of GPAs
+nls_interp|>
+  filter(Avg_GPA != 0)|> #Zero GPAS taken out
+ggplot(aes(x = Avg_GPA))+
+  geom_histogram(bins = 30)
+# trends in sexual partners over time based on High versus Low GPAs. Looking at if there are differences based on high school academic performance
+ nls_interp|>  
+  filter(!is.na(Avg_GPA))|>
+  filter(Avg_GPA != 0)|> # zero GPAs removed
+  mutate(GPA_YN = ifelse(Avg_GPA >= 2.765, "High", "Low"))|>
+  group_by(year,Region, Sex, GPA_YN) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= as.factor(GPA_YN))) +
+  geom_line()+
+  theme_bw()
+
+# Sexual partners over time for high compared to low GPAs by different regions. Looking for more interactions
+ nls_interp|>  
+  filter(!is.na(Avg_GPA))|>
+  filter(Avg_GPA != 0)|>
+  mutate(GPA_YN = ifelse(Avg_GPA >= 2.765, "High", "Low"))|>
+  group_by(year,Region, Sex, GPA_YN) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= as.factor(GPA_YN))) +
+  geom_line()+
+  facet_wrap(~Region)+
+  theme_bw()
+
+
+#  Looking at how marriage status influences sexual partners over time
+ 
+  nls_interp|>  
+  group_by(year,Marriage_Status, Sex) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= Marriage_Status)) +
+  geom_line()+
+  theme_bw()
+ 
+ 
+ # Sexual partners over time for high compared to low GPAs by different Marriage statuses. Looking for interactions
+ nls_interp|>  
+  filter(!is.na(Avg_GPA))|>
+  filter(Avg_GPA != 0)|>
+  mutate(GPA_YN = ifelse(Avg_GPA >= 2.765, "High", "Low"))|>
+  group_by(year,Marriage_Status, Sex, GPA_YN) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= as.factor(GPA_YN))) +
+  geom_line()+
+  facet_wrap(~Marriage_Status)+
+  theme_bw()
+ 
+# Looking at sexual partners for those of different puberty ages.
+#intended to explore if age of puberty has any relationship with sexual partners
+ favstats(~Puberty_age, data = nls_interp)
+ 
+ nls_interp|>
+ggplot(aes(x = Puberty_age))+
+  geom_histogram(bins = 15)
+ 
+ nls_interp|>  
+  filter(!is.na(Avg_GPA))|>
+  filter(Avg_GPA != 0)|>
+  filter(!is.na(Puberty_age))|>
+  mutate(Pub_Late = ifelse(Puberty_age >= 12, "Late", "Early"))|>
+  group_by(year,Pub_Late, Sex) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= as.factor(Pub_Late))) +
+  geom_line()+
+  theme_bw()
+ 
+```
+
+```{r}
+#More analysis of the effect GPA has on sexual partners. First plot removes observations with partners greater than 1000 as these are unusually high.
+nls_interp |> 
+  filter(NUM_PARTNERS_SINCE_DLI <= 50)|>
+  ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, y = Avg_GPA)) + geom_point(size = 0.2, alpha = 0.2) + geom_smooth() + geom_smooth(method = "lm", color = "red")+
+  theme_bw()
+
+
+nls_interp |> 
+  filter(NUM_PARTNERS_SINCE_DLI <= 250)|>
+  ggplot(aes(x = NUM_PARTNERS_SINCE_DLI, y = Avg_GPA)) + geom_point(size = 0.2, alpha = 0.2) + geom_smooth() + geom_smooth(method = "lm", color = "red")+
+  theme_bw()
+```
+
+
+#Models
+```{r}
+nls_interp2 <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  drop_na(NUM_PARTNERS_SINCE_DLI)|>
+  group_by(PUBID)|>
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist),1,0),
+         year_center = year - 1997,
+         GPA_center = Avg_GPA - 2.542928,
+         relationship = ifelse(Marriage_Status == "Divorced", "Not Cohabit", ifelse(Marriage_Status =="Never Married","Not Cohabit" ,ifelse(Marriage_Status =="Separated","Not Cohabit", ifelse(Marriage_Status =="Widowed","Not Cohabit","Cohabit")))),
+        partners = ifelse(NUM_PARTNERS_SINCE_DLI <= 1, 0,1)
+         )
+favstats(~GPA_center, data = nls_interp2)
+
+
+ nls_interp2|>  
+  drop_na(relationship)|>
+  group_by(year,relationship, Sex) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI)) |>
+  ggplot(aes(x=year, y=avg_partner, color= relationship)) +
+  geom_line()+
+  theme_bw()
+
+#
+nls_interp|>
+  group_by(PUBID)|>
+  summarize(event = mean(partners, na.rm = TRUE))
+
+Partners1 <- glmer(NUM_PARTNERS_SINCE_DLI ~  year_center + (1 | PUBID), data = nls_interp2, family = poisson)
+summary(Partners1)
+
+Partners2 <- glmer(NUM_PARTNERS_SINCE_DLI ~   + year_center + Avg_GPA + (1 | PUBID), data = nls_interp2, family = poisson)
+
+summary(Partners2)
+
+Partners3 <- glmer(NUM_PARTNERS_SINCE_DLI ~  year_center + Avg_GPA + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+summary(Partners3)
+
+Partners4 <- glmer(NUM_PARTNERS_SINCE_DLI ~  year_center + Avg_GPA + relationship + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist )
+
+summary(Partners4)
+
+Partners5 <- glmer(NUM_PARTNERS_SINCE_DLI ~  Sex + year_center + Avg_GPA + relationship + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+summary(Partners5)
+
+Partners6 <-  glmer(NUM_PARTNERS_SINCE_DLI ~  Region + Sex + year_center + Avg_GPA + relationship + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+summary(Partners6)
+
+Partners7 <-  glmer(NUM_PARTNERS_SINCE_DLI ~ Sex + GPA_center + year_center + GPA_center:year_center + relationship  + (year_center | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+summary(Partners7)
+
+favstats(~NUM_PARTNERS_SINCE_DLI, data = nls_interp2)
+
+
+exp(-0.081636)
+
+exp(0.055117)
+
+exp( 0.315933 )
+```
+
+
+```{r Libraries and Dataset Setup 2, echo = FALSE, include = FALSE}
+# pivots the data longer. Row observational units are PUBID and Year. 
+nls_clean <- read.csv("~/Stats_316_F24/Project/DR_MB/nls_clean.csv")
+nls_long <- nls_clean|>
+    relocate(PUBID)|>
+    pivot_longer(cols = matches("[0-9]{4}$"), names_to = c(".value","year"), names_pattern = "(.*)([0-9]{4}$)" )|>
+  relocate(year) |>
+   mutate(year = as.numeric(year),
+         year_since_1997 = year - 1997, #Centering year
+         age = year - Birth_Year, #creating Age
+         Puberty_age = ifelse(!is.na(MALE_PUB_AGE), MALE_PUB_AGE, 
+                              ifelse(!is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, NA)))|> #Combining puberty age variables
+#select(1:10, 29:36, 38, everything())drop_na(NUM_PARTNERS_SINCE_DLI)|>
+  group_by(PUBID)|>
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist),1,0),
+         year_center = year - 1997,
+         relationship = ifelse(Marriage_Status == "Divorced", "Not Cohabit", ifelse(Marriage_Status =="Never Married","Not Cohabit" ,ifelse(Marriage_Status =="Separated","Not Cohabit", ifelse(Marriage_Status =="Widowed","Not Cohabit","Cohabit")))), #Condenses Marriage Status
+        partners = ifelse(NUM_PARTNERS_SINCE_DLI <= 1, 0,1) 
+         )
+
+nls_interp <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  group_by(PUBID)|>
+  mutate(age = year - Birth_Year) %>%
+  arrange(year)|>
+  filter(any(!is.na(NUM_PARTNERS_SINCE_DLI)))|> # removes people who do not have any recorded sexual partner data
+  ungroup() %>%
+  #mutate(NUM_PARTNERS_SINCE_DLI = ifelse(is.na(NUM_PARTNERS_SINCE_DLI), 0, NUM_PARTNERS_SINCE_DLI))|> # 
+  fill(SEX_SINCE_DLI, .direction = "downup")|>
+  fill(Avg_GPA, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 2 variable, so NA values can be filled.
+  fill(Region, .direction = "downup")|>#fills in Region if missing for each person. AVG_GPA is a level 1 variable.
+  fill(Sex, .direction = "downup")|>#fills in sex if missing for each person. Sex is a level 1 variable.
+  fill(Marriage_Status, .direction = "downup")|> #fills in Marrige if missing for each person. Marriage is a level 1 variable.
+  fill(Ethnicity, .direction = "downup")|> #fills in Ethnicity if missing for each person. Ethnicity is a level 2 variable.
+  fill(Race, .direction = "downup")|> #fills in Race if missing for each person. Race is a level 2 variable.
+  fill(Rural_Urban, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable.
+  fill(NUM_PARTNERS_SINCE_DLI, .direction = "downup")|>#fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable, and a dependent variable.
+  arrange(PUBID)
+
+
+nls_SSD_offset <- nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA) & !is.na(age) & !is.na(Marriage_Status))  %>%
+  drop_na(SEX_SINCE_DLI)%>%
+  group_by(PUBID) %>%
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist)) %>%
+  ungroup()
+
+nls_interp2 <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  drop_na(NUM_PARTNERS_SINCE_DLI)|>
+  group_by(PUBID)|>
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist), #creates interview time variable
+         year_center = year - 1997,
+         age_center = age - 20, 
+         relationship = ifelse(Marriage_Status == "Divorced", "Not Cohabit", ifelse(Marriage_Status =="Never Married","Not Cohabit" ,ifelse(Marriage_Status =="Separated","Not Cohabit", ifelse(Marriage_Status =="Widowed","Not Cohabit","Cohabit")))),
+        partners = ifelse(NUM_PARTNERS_SINCE_DLI <= 1, 0, 1),
+        GPA_center = Avg_GPA - summarise(nls_interp %>% ungroup(), mean(Avg_GPA, na.rm = TRUE))[[1]]) |>
+  ungroup()
+
+nls_interp2|>
+  distinct(interview_dist)
+
+```
+
+```{r}
+nls_interp2 |> 
+  #filter(NUM_PARTNERS_SINCE_DLI <= 250)|>
+  ggplot(aes(x = SEX_SINCE_DLI, y = Avg_GPA)) + geom_point(size = 0.2, alpha = 0.2) + geom_smooth() + geom_smooth(method = "lm", color = "red")+
+  theme_bw()
+
+favstats(~Avg_GPA, data = nls_interp2)
+```
+
+
+Level 1:
+
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) = a_i + b_iYear_{ij} + d_iRelationship_{ij}$$
+Level 2:
+
+$$a_i = \alpha_0 + \alpha_1Sex_i + \alpha_2Avg\_GPA_i + u_i$$
+
+$$b_i = \beta_0 + \beta_1Avg\_GPA_i +v_i$$
+$$c_i = \gamma_0$$
+$$d_i = \delta_0$$
+Composite Model
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) =  \alpha_0 + \alpha_1Sex_i + \alpha_2Avg\_GPA_i + u_i + \beta_0Year_{ij} + \beta_1Avg\_GPA_i*Year_{ij} + v_iYear + \delta_0Relationship_{ij}$$
+
+$\alpha_0$: 
+
+$\alpha_1$ On average, after adjusting for the year, average GPA, Region, and whether they were co-habitating with a partner, Men have 0.2 more sexual partners than women. 
+
+$ \alpha_2$ There is statistically significant evidence that on average, after adjusting for the year, Sex, Region, and whether they were co-habitating with a partner, unit increase in an individuals average GPA is associated with around 1 less reported sexual partner per interview distance. 
+
+$ \beta_0$: On average, after adjusting for the sex, average GPA, Region, and whether they were co-habitating with a partner, the average respondent is expected to report about 1 additional sexual partner each year 
+
+$\gamma_0$: 
+
+$\delta_0$: On average, after adjusting for time, the sex, average GPA, Region the average respondent who is not co-habitating with a partner is expected to report about 1.37  more sexual partners than those who are co-habitating.
+
+$\sigma_u$ The respondent to respondent St. Deviation in number of sexual partners for those in the women in the north central who were not cohabitating with a partner is  1.4438   
+
+$\sigma_v = $ the respondent to respondent St. Deviation of the slope on year is 0.1871, after adjusting for their age, average GPA, sex, region, and if there were co-habitating with a partner. 
+
+$\rho_{uv} = -0.81:$ The correlation between the random variables $u_i$ and $v_i$ is -0.81. This means that in general, a higher variance in number of sexual partners early in one's life will tend to decrease as a person's age increases, and a low variance in number of sexual encounters early in one's life will tend to increase. 
+
+```{r}
+
+summary(Partners7)
+
+fixed_effects <- data.frame(
+  variable = c("(Intercept)", "RegionNortheast", "RegionSouth", "RegionWest", 
+           "SexMale", "year_center", "Avg_GPA", "relationshipNot Cohabit"),
+  estimate = c(-0.047040, -0.352494, 0.011709, 0.194583, 0.204055,  0.055117, 
+              -0.081636, 0.315933),
+  std_error = c(0.056066, 0.038445, 0.030039, 0.032369, 0.030245, 0.003924, 
+                0.014716, 0.013116),
+  z_value = c(-0.839, -9.169, 0.390, 6.011, 6.747, 14.046,-5.547, 24.087 )
+)
+
+# Random effects and residuals
+random_effects <- data.frame(
+  group = c("PUBID  (Intercept)", "year_center"),
+  variance = c(2.08453, 0.03499),
+  std_dev = c(1.4438, 0.1871),
+Corr = -0.84)
+
+# Table for fixed effects
+fixed_effects_table <- fixed_effects %>%
+  gt() %>%
+  tab_header(title = "MLM Poisson Fixed Effects") %>%
+  cols_label(
+    variable = "Effect",
+    estimate = "Estimate",
+    std_error = "Standard Error",
+    z_value = "t-value"
+  ) %>%
+  fmt_number(
+    columns = c(estimate, std_error, z_value), 
+    decimals = 3
+  )
+
+# Table for random effects
+random_effects_table <- random_effects %>%
+  gt() %>%
+  tab_header(title = "Random Effects for Linear Mixed Model") %>%
+  cols_label(
+    group = "Group",
+    variance = "Variance",
+    std_dev = "Standard Deviation"
+  ) %>%
+  fmt_number(
+    columns = c(variance, std_dev), 
+    decimals = 3
+  )
+kable(summary(Partners7))
+kable(fixed_effects_table)
+kable(random_effects_table)
+```
+
+
+### 2.2.1 Frequency of Sex Since Last Interview
+
+The first model we tried used only Avg_GPA as a predictor for number of sexual encounters. 
+
+Sex Encounters Naive Model 0: 
+
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) = \alpha_0 + \alpha_1Avg\_GPA_i + u_i$$
+
+```{r, Sex Count: Naive model, echo = FALSE, cache = TRUE, warning = FALSE}
+nls_fil1 <-nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA) & !is.na(age) & !is.na(Marriage_Status))
+nls_SSD_offset <- nls_fil1  %>%
+  drop_na(SEX_SINCE_DLI)%>%
+  group_by(PUBID) %>%
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist))
+
+#glmer0 <-glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist)
+
+#saveRDS(glmer0, "~/Stats_316_F24/Project/DR_MB/glmer0.rds")
+glmer0 <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer0.rds")
+
+
+#glmer1 <-glmer(SEX_SINCE_DLI ~  Avg_GPA + (1 | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist)
+
+#saveRDS(glmer1, "~/Stats_316_F24/Project/DR_MB/glmer1.rds")
+glmer1 <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer1.rds")
+
+
+#anova(glmer0, glmer1) %>% as.data.frame() %>% kable()
+
+summary(glmer1)$coefficients %>%
+  as.data.frame() %>% rownames_to_column(var = "Variables") %>%
+  as_tibble() %>%
+  kable(escape = TRUE, caption = "Naive Model 0 Summary")
+#Avg_GPA not significant by itself
+```
+
+This test shows that average HS GPA is not significant by itself. This
+gives a preliminary answer to our question "Is Avg GPA a significant
+predictor of number of sexual encounters?"
+
+However, this basic model is a significant oversimplification of the
+picture, because people change over time. Our second model will account
+for the age and marriage / cohabitation status at the time of interview.
+The addition of these level one variables will hopefully allow us to
+isolate any impact Average GPA might have.
+
+
+Composite Model 1:
+
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) = \alpha_0 + \alpha_1Avg\_GPA_i + \delta_0Relationship_{ij} + u_i + \beta_0Age_{ij} + \beta_1Avg\_GPA*Age_{ij} +v_iAge_{ij}$$
+
+```{r, Sex Count: Final Model, echo = FALSE, cache = TRUE, warning = FALSE}
+#Commenting out the model creation code because it was taking a really long time to knit. To check that model produces 
+
+#glmer2 <-glmer(SEX_SINCE_DLI ~ Avg_GPA:age + Avg_GPA + age + Marriage_Status + (age | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+#glmer3 <-glmer(SEX_SINCE_DLI ~ Sex + GPA_center + age_center + GPA_center:age_center + relationship + (age_center | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+#
+#saveRDS(glmer3, "~/Stats_316_F24/Project/DR_MB/glmer2.rds")
+frequency <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer2.rds")
+#summary(glmer3)
+#summary(glmer2)
+
+
+summary(frequency)$coefficients %>% as.data.frame()  %>%
+  kable(escape = TRUE, caption = "Composite Model 1 Fixed Effects Summary")
+
+frequency %>% VarCorr() %>% as.data.frame() %>%
+  kable(escape = TRUE, caption = "Composite Model 1 Random Effects Summary")
+
+#install.packages("stargazer")
+#library(stargazer)
+
+#stargazer(glmer2, type = "text", style = "default", summary = FALSE, title = "Model Results- Sex Counts", digits = 3)
+
+```
+
+After adjusting for biological sex and if a respondent was cohabitating
+with a partner, each additional year, for individuals with the an
+average high school GPA value, we expect the sexual frequency per number
+of years since their last interview to decrease by a factor of 0.98.
+This effect is **statistically significant**. In addition, there is
+**statistically significant** evidence that those who are age 17
+experience a 0.62 times decline in sexual frequency for each additional
+point in GPA compared to a 0.7 times decline for those who are 23. In
+addition, after adjusting for sex, relationship status, and GPA, the
+respondent-to-respondent standard deviation in the number of sexual
+partners per year since the last interview as they age is 0.3919.
+Moreover, on average, after adjusting for the GPA, age, and whether they
+were cohabitating, men had lower likelihood in sexual frequency per
+number of years since their last interview by a factor of 0.8 than
+women. Finally, after adjusting for sex, GPA, and Age, those who were
+not cohabitating had a sexual frequency per number of years since their
+last interview that was lower by a factor of 0.57 than those who were
+cohabitating. This is also statistically significant.
+
+### 2.2.2 Number of Sexual Partners Since Last Interview
+
+Composite Model 2: 
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) =  \alpha_0 + \alpha_1Sex_i +\delta_0Relationship_{ij} + \alpha_2Avg\_GPA_i + u_i +  \beta_0Age_{ij} + \beta_1Avg\_GPA_i*Age_{ij}+v_iAge{ij}$$
+
+```{r, Partner Count: Model, echo = FALSE, cache = TRUE, warning = FALSE}
+
+#Partners7 <-  glmer(NUM_PARTNERS_SINCE_DLI ~ Sex + GPA_center + age_center + GPA_center:age_center + relationship + (age_center | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+#summary(Partners7)
+
+#saveRDS(Partners7, "~/Stats_316_F24/Project/DR_MB/partners7.rds")
+Partners <-read_rds("~/Stats_316_F24/Project/DR_MB/partners7.rds")
+
+#favstats(~age, data =nls_interp2)
+#favstats(~interview_dist, data = nls_interp2)
+
+summary(Partners)$coefficients %>% as.data.frame()  %>%  kable(escape = TRUE, caption = "Composite Model 2 Fixed Effects Summary")
+
+Partners %>% VarCorr() %>% as.data.frame()  %>% kable(escape = TRUE, caption = "Composite Model 2 Random Effects Summary") 
+ 
+  
+#stargazer(Partners7, type = "text", style = "default", summary = FALSE, title = "Model Results- Partner Counts", digits = 3) 
+
+
+```
+
+After adjusting for biological sex and if a respondent was cohabitating
+with a partner, each additional year, for individuals with the an
+average high school GPA value, we expect the number of sexual partners
+per number of years since their last interview to increase by a factor
+of 1.001. This effect is **not statistically significant**.
+Moreover,those who are age 17 are expected to have a 1.024263 times
+increase in sexual frequency for each additional point in GPA compared
+to a 1.032966 times increase for those who are 23. This effect is also
+**not statistically significant**. In addition, after adjusting for sex,
+relationship status, and GPA, the respondent-to-respondent standard
+deviation in the number of sexual partners per year since the last
+interview is 0.2785. Moreover, on average, after adjusting for the GPA,
+age, and whether they were cohabitating, men had 1.005 times more sexual
+partners per time since last interviewed than women. This is also not
+statistically significant.
+
+
+
+```{r,fig.height=5, fig.width=10, echo = FALSE, warning = FALSE, message = FALSE}
+#Frequency by GPA and Age
+nls_SSD_offset|>
+    mutate(GPA_cuts = cut(Avg_GPA, breaks = c(-Inf, 1.98,  3.24, Inf), 
+  labels = c("low", "middle", "high")))%>%
+  filter(!is.na(NUM_PARTNERS_SINCE_DLI)) %>%
+  group_by(age,GPA_cuts) |>
+  summarize(avg_sex = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_sex, color= GPA_cuts), se = FALSE) +
+  labs(title = "Average Number of Sexual Partners by GPA", 
+       x = "Age",
+       y = "Number of Sexual Partners Since Last Interview",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+
+
+nls_SSD_offset|>
+    mutate(GPA_cuts = cut(Avg_GPA, breaks = c(-Inf, 1.98,  3.24, Inf), 
+  labels = c("low", "middle", "high")))%>%
+  filter(!is.na(SEX_SINCE_DLI)) %>%
+  group_by(age,GPA_cuts) |>
+  summarize(avg_sex = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_sex, color= GPA_cuts), se = FALSE) +
+  labs(title = "Average Sexual Frequency by GPA", 
+       x = "Age",
+       y = "Reported Sexual Frequency Since Last Interview",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+```
+
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) = \beta_0 + \beta_0Age_{ij} + \beta_1Age_{ij}^2 + \alpha_0Sex_i + \alpha_1Sex_iAge_{ij} + \alpha_2Sex_iAge_{ij}^2+\delta_0Relationship_{ij} + \\ \delta_1Relationship_{ij}Age_{ij} + \delta_2Relationship_{ij}Age_{ij}^2+ \gamma_0Avg_GPA_i + \gamma_1Avg_GPA_i*Age_{ij}+ \gamma_1Avg_GPA_i*Age_{ij}^2+ u_i $$
+$$\log(\frac{\lambda_{ij}}{interview\_dist_{ij}}) =  \alpha_0 + \beta_0Sex_i + \gamma_0Avg\_GPA_i + \delta_0Relationship_{ij} + \\ (\alpha_1 + \beta_1 Sex_i + \gamma_1Avg\_GPA_i + \delta_1Relationship_{ij}) * Age_{ij} + \\
+(\alpha_2 + \beta_2 Sex_i + \gamma_2Avg\_GPA_i + \delta_2Relationship_{ij}) * Age_{ij}^2$$

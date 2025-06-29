@@ -1,0 +1,895 @@
+---
+title: " Academics and Sexual Activity: An Analysis of Sexual Behavior Over Time"
+author: "Matthew Blake and Donovan Roddy"
+editor_options:
+  markdown:
+    wrap: 72
+  chunk_output_type: console
+output:
+  pdf_document:
+    latex_engine: pdflatex
+  html_document:
+    df_print: paged
+---
+
+# 1. Introduction
+
+Trends in sexual relationships have been a nuanced and ongoing question
+among sociologists and sexual health professionals. Variation in the
+number of sexual partners between genders and ages has evolved over the
+years in response to economic and social movements (Tillman, Brewster,
+and Holway 2019). In particular, the frequency at which young people
+have sex has been on the decline, particularly among young adults (Lei
+and South 2021). This is occurring despite adults in the 2000s being
+more likely to have more sexual partners and being more willing to
+engage in casual sex than those of the 80s and 90s (Twenge, Sherman, and
+Wells 2015). Exploring the role education plays in sexual health has
+also been a frequent point of discussion.
+
+Finding predictors of sexual relationships amongst youth has been an
+ongoing question. In particular, negative performance in school has been
+indicated to be associated with increased sexual activity, along with
+the age at which a person goes through puberty (Kan et al. 2010).
+However, the discussion about academics and sex has also been expanded
+to indicate that the relationship between academics and sexual behavior
+may be more related to risky sexual behavior, rather than sexual
+behavior on its own (Frisco 2008). In addition, further studies have
+suggested that busy people may have limited time available for long-term
+relationships which could lead to a larger number of short-term sexual
+relationships, particularly in college (Fielder and Carey 2010).
+
+Fundamentally, while high school educational performance has been
+suggested to be related to sexual activity, exploring if this
+relationship persists past high school has been limited. Therefore,
+understanding how this will predict current trends in sexual
+relationships can reveal insight into how educational attainment
+correlates to sexual practices. Due to emerging information on reported
+sexual activity among young people, and further social acceptance of
+sexual activity, further exploration of sexual relationships can inform
+sociologists about how young people make sexual choices.
+
+This project investigates whether there is an association between one’s
+high school academic performance and sexual behavior. Using Longitudinal
+data from the National Longitudinal Study of Youth from 1997 (NLSY97),
+We utilize multi-level Poisson regression to explore if high school GPA
+has any effect on sexual behavior over time by looking at both
+respondents’ self-reported sexual frequency and self-reported number of
+sexual partners. We also explore differences in sexual frequency and
+reported partners between men and women and between those living with a
+partner and those not. We hypothesized that GPA is associated
+with both sexual frequency and number of partners reported. Our analysis
+suggests evidence that aligns with our initial hypothesis. However, limitations in our data suggest our findings could be biased, leaving discussions open on what predicts individuals’ sexual decisions.
+
+```{r Libraries and Dataset Setup, message=FALSE, warning=FALSE, echo = FALSE}
+# Set CRAN mirror to avoid errors with package installation
+options(repos = c(CRAN = "https://cloud.r-project.org/"))
+
+# Load libraries
+library(tidyverse)
+library(mosaic)
+library(kableExtra)
+library(sjPlot)
+library(lme4)
+library(tinytex)
+library(gridExtra)
+#library(glmmTMB)
+
+
+#Package installation code courtesy of ChatGPT
+
+# Install necessary packages (if not already installed)
+if (!requireNamespace("xfun", quietly = TRUE)) {
+  install.packages("xfun")
+}
+if (!requireNamespace("tinytex", quietly = TRUE)) {
+  install.packages("tinytex")
+}
+
+# Install TinyTeX if it's not installed or force installation if necessary
+if (!tinytex::is_tinytex()) {
+  tinytex::install_tinytex(force = TRUE)
+} else {
+  message("TinyTeX is already installed.")
+}
+
+# Install LaTeX package `threeparttablex` using TinyTeX manager
+#tinytex::tlmgr_install("threeparttablex")
+options(digits = 3)
+
+
+```
+
+```{r Libraries and Dataset Setup 2, echo = FALSE, include = FALSE}
+# pivots the data longer. Row observational units are PUBID and Year. 
+nls_clean <- read.csv("~/Stats_316_F24/Project/DR_MB/nls_clean.csv")
+nls_long <- nls_clean|>
+    relocate(PUBID)|>
+    pivot_longer(cols = matches("[0-9]{4}$"), names_to = c(".value","year"), names_pattern = "(.*)([0-9]{4}$)" )|>
+  relocate(year) |>
+   mutate(year = as.numeric(year),
+         year_since_1997 = year - 1997, #Centering year
+         age = year - Birth_Year, #creating Age
+         Puberty_age = ifelse(!is.na(MALE_PUB_AGE), MALE_PUB_AGE, 
+                              ifelse(!is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, NA)))|> #Combining puberty age variables
+#select(1:10, 29:36, 38, everything())drop_na(NUM_PARTNERS_SINCE_DLI)|>
+  group_by(PUBID)|>
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist),1,0),
+         year_center = year - 1997,
+         relationship = ifelse(Marriage_Status == "Divorced", "Not Cohabit", ifelse(Marriage_Status =="Never Married","Not Cohabit" ,ifelse(Marriage_Status =="Separated","Not Cohabit", ifelse(Marriage_Status =="Widowed","Not Cohabit","Cohabit")))), #Condenses Marriage Status
+        partners = ifelse(NUM_PARTNERS_SINCE_DLI <= 1, 0,1) 
+         )
+
+nls_interp <- nls_long|>
+  #filter(year <= 2008)|>#drops years after 2008. Sexual health data not recorded 
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  group_by(PUBID)|>
+  mutate(age = year - Birth_Year) %>%
+  arrange(year)|>
+  filter(any(!is.na(NUM_PARTNERS_SINCE_DLI)))|> # removes people who do not have any recorded sexual partner data
+  ungroup() %>%
+  #mutate(NUM_PARTNERS_SINCE_DLI = ifelse(is.na(NUM_PARTNERS_SINCE_DLI), 0, NUM_PARTNERS_SINCE_DLI))|> # 
+  fill(SEX_SINCE_DLI, .direction = "downup")|>
+  fill(Avg_GPA, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 2 variable, so NA values can be filled.
+  fill(Region, .direction = "downup")|>#fills in Region if missing for each person. AVG_GPA is a level 1 variable.
+  fill(Sex, .direction = "downup")|>#fills in sex if missing for each person. Sex is a level 1 variable.
+  fill(Marriage_Status, .direction = "downup")|> #fills in Marrige if missing for each person. Marriage is a level 1 variable.
+  fill(Ethnicity, .direction = "downup")|> #fills in Ethnicity if missing for each person. Ethnicity is a level 2 variable.
+  fill(Race, .direction = "downup")|> #fills in Race if missing for each person. Race is a level 2 variable.
+  fill(Rural_Urban, .direction = "downup")|> #fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable.
+  fill(NUM_PARTNERS_SINCE_DLI, .direction = "downup")|>#fills in AVG_GPA if missing for each person. AVG_GPA is a level 1 variable, and a dependent variable.
+  arrange(PUBID)
+
+
+nls_SSD_offset <- nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA) & !is.na(age) & !is.na(Marriage_Status))  %>%
+  drop_na(SEX_SINCE_DLI)%>%
+  group_by(PUBID) %>%
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist)) %>%
+  ungroup()
+
+nls_interp2 <- nls_long|>
+  mutate(year = as.double(year))|>#turns year from a character to a double
+  mutate(Puberty_age = ifelse(
+    !is.na(FEMALE_FMP_AGE), FEMALE_FMP_AGE, ifelse(
+      !is.na(MALE_PUB_AGE), MALE_PUB_AGE, NA))) |> #creates puberty age variable
+  drop_na(NUM_PARTNERS_SINCE_DLI)|>
+  group_by(PUBID)|>
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist), #creates interview time variable
+         year_center = year - 1997,
+         age_center = age - 20, 
+         relationship = ifelse(Marriage_Status == "Divorced", "Not Cohabit", ifelse(Marriage_Status =="Never Married","Not Cohabit" ,ifelse(Marriage_Status =="Separated","Not Cohabit", ifelse(Marriage_Status =="Widowed","Not Cohabit","Cohabit")))),
+        GPA_center = Avg_GPA - summarise(nls_interp %>% ungroup(), mean(Avg_GPA, na.rm = TRUE))[[1]]) |>
+  ungroup()
+
+nls_interp2|>
+  distinct(interview_dist)
+
+```
+
+# 2. Data and Methods.
+
+## 2.1 Data
+
+The data used in this study comes from the National Longitudinal Study
+of Youth from 1997 (NLSY97). The survey looks at 9884 people, born
+between 1980-1984. The data was collected through yearly interviews,
+from 1997 until 2008. The questions were administered via a CAPI
+(Computer-Assisted Personal Interview) instrument, which helps guide the
+respondent through the process, and ensure that invalid answers are not
+given. Sometimes, these tests are administered with an interview present
+in person, but this is not always the case. Some of the questions are
+self-administered. Respondents were offered \$10-20 per round of
+interviewing they participated in. Other incentives were also sometimes
+offered.
+
+The interviews collected information about employment, demographics,sexual activity, dating and marriage, family, health trends, and various other attributes. This data focuses on information related to age when the respondent experiences puberty, age of first sex encounter, race, ethnicity, and sexual identity. Some important predictors for our analysis include marriage status, which indicates if a respondent is married, cohabitating with a partner, divorced or never married, as well as the respondent's biological sex. Our dependent variables of interest are an individual’s reported number of times they had sex since their last interview and the reported number of sexual partners they had since their last interview. Regarding respondent's reporting on the number of times they had sex, there is evidence of underreporting, where multiples of 100 appear to be over represented (See Figure 5 in Appendix). In addition, many respondents did not have data on either sexual frequency or reported sexual partners and these observations were dropped. Most participants who did have data did not get asked questions regarding either of the two measures every year. So, for each person, these missing observations were also dropped, and we created a variable that counted the number of years since their last interview. There were also a few respondents who reported a significantly higher number of sexual partners and high sexual frequencies compared to the rest of the cohort. While we did not think these values were data entry error, these values were also removed in the as there were very few of them and they were skewing initial estimations. We also removed observations for missing responses on each of our dependent variables. Following this filtering, the sample for the analysis includes 3,064 respondents. 
+
+## 2.2 Methods
+
+The model we chose to use for this analysis was a multi-level Poisson model. This model was chosen as the dependent variable is represented as count data at a certain time. However, since there was variation in the number of years since the last interview for respondents on both questions, we included an offset based on the number of years since the last interview. Although there was evidence of the mean and variance not being particularly similar (See Figure 6 in Appendix), this model was the best choice given the computational challenges of quasi-Poisson or a multi-level negative binomial model. To measure time, we chose the respondent’s age rather than the year as this would be more representative of their evolution in sexual maturity. This variable was also centered on the median age of 20 years old. In our model, we included random effects intercepts that accounted for individual variation in sexual partners. To simplify the analysis, we incorporated sex as a time-invariant covariate and relationship status as a time-varying covariate. Relationship status is a binary variable where zero indicates if the respondent was cohabitating with another person, and 1 indicates that they were not. This was derived from a variable which was describing seven different marriage status categories, and was simplified because much of the variation in sexual activity is likely related to whether a respondent was living with or seeing someone. Sex was chosen as it was indicated in literature that men tended to have more sexual partners than women (Tillman, Brewster, and Holway 2019). Our variable of interest was the respondent’s average GPA in high school. This variable did not change over time, even for when the respondents were in high school as it was a calculation of their overall high school academic performance. This variable was also centered on the average GPA value of 2.54, because not every respondent had an average GPA. For the first question, namely the number of sexual encounters in a year, we started with a basic “naive” model with just a fixed effect for GPA and a random effect by person. From here, we added age and relationship status, to our model. Following observing trends in our data, we added quadratic terms for age and interactions for both covariates and our independent variable of interest. We used Nested F-tests to determine if the covariates added predictive power to our model. For the second question, namely that concerning the number of sexual partners in a year, we did not create a “naive” model, but replicated the same model, independent variables, and Nested F-tests.
+
+# 3. Results
+
+```{r Summary Stat Functions for Tables, include = FALSE, echo = FALSE}
+
+
+SumSSD <- function(var, caption_text) {
+  nls_SSD_offset %>%
+    mutate(RoundedGPA = round(Avg_GPA, 0)) %>%
+    filter(!is.na(SEX_SINCE_DLI)) %>% 
+    group_by({{var}}) %>% 
+    summarise("SSD Mean" = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), 
+              "SSD Median" = median(SEX_SINCE_DLI / interview_dist, na.rm = TRUE),  
+              SSD_sd = sd(SEX_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), 
+              "n" = n()) %>% 
+    kable(caption = caption_text) %>% 
+    kableExtra::column_spec(1:5, width = "2cm")
+}
+
+SumSSD_1 <- function(caption_text) {
+   nls_SSD_offset |> 
+    filter(!is.na(SEX_SINCE_DLI)) %>% 
+    #group_by({{var}}) %>% 
+    ungroup() %>%
+    summarise("SSD Mean   " = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), "SSD Median    " = median(SEX_SINCE_DLI / interview_dist, na.rm = TRUE),  "SSD St. Dev." = sd(SEX_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), "   n" = n()) %>% 
+     kable(caption = caption_text) %>% 
+    kableExtra::column_spec(1:4, width = "2cm")
+}
+
+
+SumPSLI <- function(var, caption_text) {
+   nls_SSD_offset|>
+    filter(!is.na(NUM_PARTNERS_SINCE_DLI)) %>% 
+    group_by({{var}}) %>% 
+    summarise("PSLI Mean" = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), 
+"PSLI Median" = median(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE),  
+"PSLI St. Dev." = sd(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), n = n()) %>%
+    kable(caption = caption_text) %>%
+    kableExtra::column_spec(1:5, width = "2cm")
+}
+
+
+SumPSLI_1 <- function(caption_text) {
+   nls_SSD_offset |> 
+    filter(!is.na(NUM_PARTNERS_SINCE_DLI)) %>% 
+    #group_by({{var}}) %>% 
+    ungroup() %>%
+    summarise("PSLI Mean   " = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), "PSLI Median    " = median(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE),  "PSLI St. Dev." = sd(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE) %>% round(1), "   n" = n()) %>% 
+     kable(caption = caption_text) %>% 
+    kableExtra::column_spec(1:4, width = "2cm")
+}
+
+```
+
+## 3.1 Sex Frequency
+
+```{r Variable Summary Tables: Sex Count 1, echo = FALSE}
+#SumSSD(Sex, "Sex")
+```
+
+```{r Variable Summary Tables: Sex Count 2, echo = FALSE}
+#SumSSD(Race, "Race")
+```
+
+```{r Variable Summary Tables: Sex Count 3, echo = FALSE}
+#SumSSD(Ethnicity, "Ethnicity")
+```
+
+```{r Variable Summary Tables: Sex Count 4, echo = FALSE}
+#SumSSD(Region, "Region")
+```
+
+```{r Variable Summary Tables: Sex Count 5, echo = FALSE}
+#SumSSD(Rural_Urban) %>% kableExtra::add_header_above(c("Table 5: Rural_Urban" = 5))
+```
+
+
+```{r, Variable Summary Tables 1: Partner Count, echo = FALSE}
+#SumPSLI(Region) %>% kableExtra::add_header_above(c("Table 10: Region" = 5))
+```
+
+```{r, Variable Summary Tables 2: Partner Count, echo = FALSE}
+#SumPSLI(Sex, "Sex")
+#Male Americans had more sexual partners in a year, on average, than female Americans. 
+```
+
+```{r, Variable Summary Tables 3: Partner Count, echo = FALSE}
+#SumPSLI(year, "Year")
+#The number of sexual partners in a year (on average) varied wildly, but generally (1999 notwithstanding) increased until a local maximum in 2004. 
+```
+
+```{r, Summary by Favstats 1: Partners, include = FALSE, echo = FALSE}
+#having two or more partners, average GPA
+kable(favstats(Avg_GPA~ partners, data = nls_interp2)) %>% 
+  kableExtra::add_header_above(c("Table 13: Avg GPA by Partners" = 10))%>%
+    kableExtra::column_spec(1:10, width = "2cm")
+
+#Individuals with 0 or 1 partners have a higher GPA, on average, than individuals with more than one partner in the past year. 
+```
+
+```{r, Summary by Favstats 2: Partners, include = FALSE, echo = FALSE}
+kable(favstats(partners~relationship, data = nls_SSD_offset)) %>% 
+  kableExtra::add_header_above(c("Table 14: Cohavitation Status by Partners" = 10)) %>%
+    kableExtra::column_spec(1:10, width = "2cm")
+```
+
+
+### 3.1.1 Sex Frequency Naive Model
+
+This first model uses only GPA as a predictor for number of sexual encounters, To account for the correlated data structure of individuals over time, we included a random intercept term to account for person to person variation in sexual frequency. In addition, not all respondents were interviewed every year and many had significant gaps in interview times. To account for this we incorporated an offset for the number of years since their last interview.
+
+$$\log(\frac{\lambda_{ij}}{Years\_since\_last\_interview_{ij}}) = \alpha_0 + \alpha_1GPA_i + u_i$$
+where $\lambda_{ij}$ represents the expected number of sexual occurrences for individual $i$ at time $j$.
+
+```{r, Sex Count: Naive model, echo = FALSE, cache = TRUE, warning = FALSE}
+nls_fil1 <-nls_interp %>% filter(!is.na(SEX_SINCE_DLI) & !is.na(Avg_GPA) & !is.na(age) & !is.na(Marriage_Status))
+nls_SSD_offset <- nls_fil1  %>%
+  drop_na(SEX_SINCE_DLI)%>%
+  group_by(PUBID) %>%
+  mutate(interview_dist = year- lag(year),
+         interview_dist = ifelse(is.na(interview_dist), 1, interview_dist))
+
+#glmer0 <-glmer(SEX_SINCE_DLI ~ (1 | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist)
+
+#saveRDS(glmer0, "~/Stats_316_F24/Project/DR_MB/glmer0.rds")
+glmer0 <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer0.rds")
+
+
+#glmer1 <-glmer(SEX_SINCE_DLI ~  Avg_GPA + (1 | PUBID), data = nls_SSD_offset, family = poisson, offset = interview_dist)
+
+#saveRDS(glmer1, "~/Stats_316_F24/Project/DR_MB/glmer1.rds")
+glmer1 <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer1.rds")
+
+
+#anova(glmer0, glmer1) %>% as.data.frame() %>% kable()
+
+summary(glmer1)$coefficients %>%
+  as.data.frame() %>% rownames_to_column(var = "Variables") %>%
+  as_tibble() %>%
+  kable(escape = TRUE, caption = "Naive Model 0 Summary")
+#Avg_GPA not significant by itself
+```
+
+This test shows that average high school GPA is not significant by itself. This
+gives a preliminary answer to our question "Is average high school GPA a significant
+predictor of number of sexual encounters?"
+
+However, this basic model is a significant oversimplification of the picture, because people change over time. Therefore, we explored the trend in sexual frequency over time to build a second model to account for the age and marriage / cohabitation status at the time of interview.
+
+### 3.1.2 Figure 1
+
+```{r,  Partners by Sex, echo = FALSE,fig.height=5, fig.width=10, warning = FALSE, message = FALSE}
+sex_gender <- nls_SSD_offset|>  
+  filter(!is.na(SEX_SINCE_DLI)) %>%
+  group_by(age,Sex) |>
+  summarize(avg_partner = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_partner, color= Sex), se = FALSE) +
+  labs(title = "Average Sexual Frequency by Sex", 
+       x = "Age",
+       y = "Average Sexual Frequency",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+
+sex_relationship <- nls_SSD_offset|>
+  drop_na(relationship)|>
+  group_by(age,relationship) |>
+  summarize(avg_sex = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_sex, color= relationship), se = FALSE)+
+  labs(title = "Average Sexual Frequency by Cohabitation Status", 
+       x = "Age",
+       y = "Average Sexual Frequency",
+       color = "Relationship Status",
+      caption = "Data Source: National Longitudinal Study of Youth in 1997") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))+
+  theme_bw()
+
+grid.arrange(sex_gender, sex_relationship, ncol=2)
+```
+
+Figure 1: These two plots display the trend in sexual frequency as the
+respondents age. The charts are broken up by sex (male and female) and
+relationship status (cohabitating, and not cohabitating) respectively.
+The charts indicate that there is not a significant difference between
+the sexes, and those who were cohabitating report having more sex since
+their last interview until around the age of 25. Data are from the
+National Longitudinal Study of Youth in 1997 and were collected from
+interviews over 25 years, with 4088 female respondents and 4250 male
+respondents. Furthermore, respondents' relationship status varied as
+they age. Respondents were between the ages of 14 and 18 over 25 years,
+with the maximum age being 41 and the minimum being 13. The y-axis is
+the respondent’s self-reported number of times they had sex since their
+last interview.
+
+### 3.1.3 Figure 2
+
+```{r,fig.height=5, fig.width=10, echo = FALSE, warning = FALSE, message = FALSE}
+#Frequency by GPA and Age
+nls_SSD_offset|>
+    mutate(GPA_cuts = cut(Avg_GPA, breaks = c(-Inf, 1.98,  3.24, Inf), 
+  labels = c("low", "middle", "high")))%>%
+  filter(!is.na(SEX_SINCE_DLI)) %>%
+  group_by(age,GPA_cuts) |>
+  summarize(avg_sex = mean(SEX_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_sex, color= GPA_cuts), se = FALSE) +
+  labs(title = "Average Sexual Frequency by GPA", 
+       x = "Age",
+       y = "Frequency of Sex",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+```
+
+Figure 2: This plots the trend in sexual frequency as the respondent's
+age, broken between high median and low high school GPAs. The charts
+indicate there do not appear to be differences in the trend in sexual
+frequency that varies by GPA, aside from a slight deviation in lower
+GPAs. Data are from the National Longitudinal Study of Youth in 1997 and
+were collected from interviews over 25 years. Respondents between the
+ages of 14 and 18 over 25 years, with the maximum age being 41 and the
+minimum being 13. GPA is measured on a 4.0 scale and does not vary over
+time as it is a measure of their high school academic performance. The
+y-axis is the respondent’s self-reported number of times they had sex
+since their last interview.
+
+### 3.1.4 Sex Frequency Composite Model:
+
+All of the figures above indicate a nonlinear relationship between each of the covariates as the respondents age. Sexual frequency for each person appears to grow at a decreasing rate until it eventually starts to decrease toward zero. The figures also indicate that any gaps between different groups begin to close as the respondents get older. As a result, we decided to incorporate quadratic terms for age that interact with each of our covariates. We incorporated a random intercept for each respondent to adjust for person to person variation, and include the same offset for years since last interview. Nested F-tests were than utilized to determine if our covariates added predictive power. Our Full Model is written below. 
+
+$$\log(\frac{\lambda_{ij}}{Years\_since\_last\_interview_{ij}}) = u_i +  \alpha_0 + \beta_0Sex_i + \gamma_0GPA_i + \delta_0Relationship_{ij}$$ $$ + (\alpha_1 + \beta_1 Sex_i + \gamma_1GPA_i + \delta_1Relationship_{ij}) * Age_{ij}  $$ $$ + (\alpha_2 + \beta_2 Sex_i + \gamma_2GPA_i + \delta_2Relationship_{ij}) * Age_{ij}^2 $$
+
+where $\lambda_{ij}$ represents the expected number of sexual partners
+for individual $i$ at time $j$.
+
+```{r, Sex Count: Final Model, echo = FALSE, cache = TRUE, warning = FALSE}
+#Commenting out the model creation code because it was taking a really long time to knit. To check that model produces 
+
+  
+
+#glmer2 <-glmer(SEX_SINCE_DLI ~ Avg_GPA:age + Avg_GPA + age + Marriage_Status + (age | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+#glmer3 <-glmer(SEX_SINCE_DLI ~ Sex + GPA_center + age_center + GPA_center:age_center + relationship + (age_center | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+#glmer4 <-glmer(SEX_SINCE_DLI ~ Sex + GPA_center + poly(age_center,2) + GPA_center:poly(age_center,2) + relationship + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+
+sex <- nls_interp2|>
+  group_by(PUBID)|>
+  filter(SEX_SINCE_DLI <= 6000)|>
+  filter(!is.na(Sex))|>
+  filter(!is.na(relationship))|>
+  filter(!is.na(GPA_center))|>
+  ungroup()
+
+#sex1 <-glmer(SEX_SINCE_DLI ~ poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = sex, family = poisson, offset = interview_dist)
+
+#sex2 <-glmer(SEX_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = sex, family = poisson, offset = interview_dist)
+
+#sex3 <-glmer(SEX_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + (1 | PUBID), data = sex, family = poisson, offset = interview_dist)
+
+#sex4 <-glmer(SEX_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = sex, family = poisson, offset = interview_dist)
+
+#saveRDS(sex1, "~/Stats_316_F24/Project/DR_MB/sex1.rds")
+#saveRDS(sex2, "~/Stats_316_F24/Project/DR_MB/sex2.rds")
+#saveRDS(sex3, "~/Stats_316_F24/Project/DR_MB/sex3.rds")
+#saveRDS(sex4, "~/Stats_316_F24/Project/DR_MB/sex4.rds")
+
+#Sex1 <-read_rds("~/Stats_316_F24/Project/DR_MB/sex1.rds")
+#Sex2 <-read_rds("~/Stats_316_F24/Project/DR_MB/sex2.rds")
+#Sex3 <-read_rds("~/Stats_316_F24/Project/DR_MB/sex3.rds")
+#Sex4 <-read_rds("~/Stats_316_F24/Project/DR_MB/sex4.rds")
+
+#saveRDS(glmer3, "~/Stats_316_F24/Project/DR_MB/glmer2.rds")
+#frequency <-read_rds("~/Stats_316_F24/Project/DR_MB/glmer2.rds")
+#summary(glmer3)
+#summary(glmer2)
+
+
+#summary(frequency)$coefficients %>% as.data.frame()  %>%
+  #kable(escape = TRUE, caption = "Composite Model 1 Fixed Effects Summary")
+
+#frequency %>% VarCorr() %>% as.data.frame() %>%
+  #kable(escape = TRUE, caption = "Composite Model 1 Random Effects Summary")
+
+#saveRDS(sex4, "~/Stats_316_F24/Project/DR_MB/sex4.rds")
+
+#install.packages("stargazer")
+#library(stargazer)
+
+#stargazer(glmer2, type = "text", style = "default", summary = FALSE, title = "Model Results- Sex Counts", digits = 3)
+
+```
+
+```{r, echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Sex1,Sex4)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "Sex")
+```
+
+
+```{r, echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Sex4,Sex3)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "Relationship")
+```
+
+
+```{r, echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Sex4,Sex2)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "GPA")
+```
+
+|               Model|     AIC|     BIC| deviance|    Chisq| Df| Pr(>Chisq)|
+|-------------------:|-------:|-------:|--------:|--------:|--:|----------:|
+|                Full| 1535791| 1535892|  1535765|         |   |           |
+|         Without Sex| 1536049| 1536127|  1536029| 264.0247|  3|          0|
+|Without Relationship| 1606023| 1606101|  1606003| 70237.78|  3|          0|
+|         Without GPA| 1542259| 1542336|  1542239| 6473.446|  3|          0|
+
+
+This table compares the full model to three different models that exclude the respondent's sex, GPA and Relationship Status. The First Nested F-test suggests statistically significant evidence (Chisq = 264.0247, p-value > 0.001) that sex adds predictive power about a respondent's expected sexual frequency per number of years since their last interview. The second Nested F-test suggests statistically significant evidence (Chisq = 70237.78, p-value > 0.001) that relationship status adds predictive power about a respondent's expected sexual frequency per number of years since their last interview. Finally, to address our research question, the last nest Nested F-test suggests statistically significant evidence (Chisq = 6473.446, p-value > 0.001) that High school GPA adds predictive power about a respondent's expected sexual frequency per number of years since their last interview.
+
+Our Nested F-tests suggest statistically significant evidence that our full model sex, GPA and relationship status has the best predicative power about sexual frequency. Therefore, this suggests that GPA has an association with sexual frequency. However, of the three covariates, the most significant predictor is relationship status, which upon its addition greatly reduced the AIC (1606023 compared to 1535791). This suggest the magnitude of the difference displayed in the plots is very pertinent. In addition, the model also suggests evidence that there is a difference in sexual frequency between men and women, although the AIC difference is relatively smaller (1535791 compared to 1536049). Moreover, there is very significant overdispersion (Residual Deviance = 1536029.3, Degrees of Freedom = 17244). Considering this, it is very likely that the z-statistics are inflated and that our estimates are skewed. This leads to great deal of uncertainty about the validity of these results.    
+
+## 3.2 Number of Partners
+
+```{r Variable Summary Tables: Sex partners 2, echo = FALSE}
+#SumPSLI(Sex, "Sex")
+
+#On average, male respondents have more partners in an average year than female respondents. 
+```
+
+```{r Variable Summary Tables: Sex partners 3, echo = FALSE}
+#SumPSLI_1("Everything")
+```
+
+### 3.2.1 Figure 3
+
+```{r,  Partners by Sex and Region,fig.height=6, fig.width=12, echo = FALSE, warning = FALSE, message = FALSE}
+partner_gender <- nls_SSD_offset|>  
+  filter(!is.na(NUM_PARTNERS_SINCE_DLI)) %>%
+  group_by(age,Sex) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_partner, color= Sex), se = FALSE) +
+  labs(title = "Average Number of Partners per Year by Sex", 
+       x = "Age",
+       y = "Average Number of Partners",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+
+
+partners_relationship <- nls_SSD_offset|>
+  drop_na(relationship)|>
+  group_by(age,relationship) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_partner, color= relationship), se = FALSE)+
+  labs(title = "Mean Number of Partners Per Year by Cohabitation Status", 
+       x = "Age",
+       y = "Average Number of Partners",
+       color = "Relationship Status",
+      caption = "Data Source: National Longitudinal Study of Youth in 1997") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))+
+  theme_bw()
+
+grid.arrange(partner_gender, partners_relationship, ncol=2)
+
+#favstats(~age, data = nls_SSD_offset)
+
+
+```
+
+Figure 3: These two plots display the trend in sexual partners since
+last interview as the respondents age. The charts are broken up by sex
+(male and female) and relationship status (cohabitating, and not
+cohabitating) respectively. The charts indicate that those who live with
+a partner report more sexual partners than those who do not until
+around the age of 25, and that men appear to have more sexual partners
+than women until around 30. Data are from the National Longitudinal
+Study of Youth in 1997 and were collected from interviews over 25 years,
+with 4088 female respondents and 4250 male respondents. Furthermore,
+respondents' relationship status varied as they age. Respondents were
+between the ages of 14 and 18 over 25 years, with the maximum age being
+41 and the minimum being 13. The y-axis is the respondent’s
+self-reported number of sexual partners with whom they had sex since their last
+interview.
+
+### 3.2.2 Figure 4
+
+```{r, fig.height=6, fig.width=12,echo = FALSE, warning = FALSE,, message = FALSE}
+#Partners by GPA and Age
+nls_SSD_offset|>
+    mutate(GPA_cuts = cut(Avg_GPA, breaks = c(-Inf, 1.98,  3.24, Inf), 
+  labels = c("low", "middle", "high")))%>%
+  filter(!is.na(NUM_PARTNERS_SINCE_DLI)) %>%
+  group_by(age,GPA_cuts) |>
+  summarize(avg_partner = mean(NUM_PARTNERS_SINCE_DLI / interview_dist, na.rm = TRUE)) |>
+  ggplot() +
+  geom_smooth(aes(x= age, y=avg_partner, color= GPA_cuts), se = FALSE) +
+  labs(title = "Average Number of Partners per Year by Sex", 
+       x = "Age",
+       y = "Average Number of Partners",
+       caption = "Data Source: National Longitudinal Study of Youth in 1997") +
+  theme(plot.caption = element_text(hjust = 0.5))+
+  theme_bw()
+
+```
+
+Figure 4: This plot displays the trend in sexual partners reported since
+last interview as the respondent's age, broken between high median and
+low High school GPAs. The charts indicate there are no significant
+differences between median and high GPA respondents, but that
+respondents with lower GPAs tend to have slightly more reported sexual
+partners since their last interview on average until the age of 30. Data
+are from the National Longitudinal Study of Youth in 1997 and were
+collected from interviews over 25 years. Respondents between the ages of
+14 and 18 over 25 years, with the maximum age being 41 and the minimum
+being 13. GPA is measured on a 4.0 scale and does not vary over time as
+it is a measure of their high school academic performance. The y-axis is
+the respondent’s self-reported number of sexual partners since their
+last interview.
+
+### 3.2.3 Number of Sexual Partners Since Last Interview Full Model
+
+Similarly to the prior findings for sexual frequency, the figures above suggest a nonlinear relationship between each of the covariates as the respondents age, and that any gaps between different groups begin to close as the respondents get older. Therefore we decided to incorporate the same quadratic terms for age that interact with each of our covariates as well as the offset and random effects. We again used Nested F-tests to determine if our covariates added predictive power. Our Full Model is written below. 
+
+$$\log(\frac{\lambda_{ij}}{Years\_since\_last\_interview_{ij}}) = u_i +  \alpha_0 + \beta_0Sex_i + \gamma_0GPA_i + \delta_0Relationship_{ij}$$ $$ + (\alpha_1 + \beta_1 Sex_i + \gamma_1GPA_i + \delta_1Relationship_{ij}) * Age_{ij}  $$ $$ + (\alpha_2 + \beta_2 Sex_i + \gamma_2GPA_i + \delta_2Relationship_{ij}) * Age_{ij}^2 $$
+
+where $\lambda_{ij}$ represents the expected number of sexual partners
+since their last interview for individual $i$ at time $j$.
+
+```{r, Partner Count: Model, echo = FALSE, cache = TRUE, warning = FALSE}
+
+#Partners7 <-  glmer(NUM_PARTNERS_SINCE_DLI ~ Sex + GPA_center + age_center + GPA_center:age_center + relationship + (age_center | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+#summary(Partners7)
+
+#Partners8 <-  glmer(NUM_PARTNERS_SINCE_DLI ~ Sex + GPA_center + poly(age_center,2) + GPA_center:poly(age_center,2) + relationship + (1 | PUBID), data = nls_interp2, family = poisson, offset = interview_dist)
+#summary(Partners8)
+
+partners<- 
+  nls_interp2|>
+  filter(NUM_PARTNERS_SINCE_DLI <=50)|>
+  mutate(sex_num = ifelse(Sex == "Male",1,0),
+         relationship_num = ifelse(relationship == "Cohabit",1,0))
+
+partners <- nls_interp2|>
+  group_by(PUBID)|>
+  filter(NUM_PARTNERS_SINCE_DLI <= 200)|>
+  filter(!is.na(Sex))|>
+  filter(!is.na(relationship))|>
+  filter(!is.na(GPA_center))|>
+  ungroup()
+
+#partners1 <-glmer(NUM_PARTNERS_SINCE_DLI ~ poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = partners, family = poisson, offset = interview_dist)
+
+#partners2 <-glmer(NUM_PARTNERS_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = partners, family = poisson, offset = interview_dist)
+
+#partners3 <-glmer(NUM_PARTNERS_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + (1 | PUBID), data = partners, family = poisson, offset = interview_dist)
+
+#partners4 <-glmer(NUM_PARTNERS_SINCE_DLI ~ poly(age_center,2) + Sex + Sex:poly(age_center,2) + GPA_center + GPA_center:poly(age_center,2) + relationship + relationship:poly(age_center,2) + (1 | PUBID), data = partners, family = poisson, offset = interview_dist)
+
+#saveRDS(partners1, "~/Stats_316_F24/Project/DR_MB/partners1.rds")
+#saveRDS(partners2, "~/Stats_316_F24/Project/DR_MB/partners2.rds")
+#saveRDS(partners3, "~/Stats_316_F24/Project/DR_MB/partners3.rds")
+#saveRDS(partners4, "~/Stats_316_F24/Project/DR_MB/partners4.rds")
+
+#Partners1 <-read_rds("~/Stats_316_F24/Project/DR_MB/partners1.rds")
+#Partners2 <-read_rds("~/Stats_316_F24/Project/DR_MB/partners2.rds")
+#Partners3 <-read_rds("~/Stats_316_F24/Project/DR_MB/partners3.rds")
+#Partners4 <-read_rds("~/Stats_316_F24/Project/DR_MB/partners4.rds")
+
+#saveRDS(Partners7, "~/Stats_316_F24/Project/DR_MB/partners7.rds")
+#Partners <-read_rds("~/Stats_316_F24/Project/DR_MB/partners7.rds")
+
+#favstats(~age, data =nls_interp2)
+#favstats(~interview_dist, data = nls_interp2)
+
+#summary(Partners)$coefficients %>% as.data.frame()  %>%  kable(escape = TRUE, caption = "Composite Model 2 Fixed Effects Summary")
+
+#Partners %>% VarCorr() %>% as.data.frame()  %>% kable(escape = TRUE, caption = "Composite Model 2 Random Effects Summary") 
+ 
+#saveRDS(partners4, "~/Stats_316_F24/Project/DR_MB/partners4.rds")
+
+
+#stargazer(Partners7, type = "text", style = "default", summary = FALSE, title = "Model Results- Partner Counts", digits = 3) 
+
+```
+
+```{r,echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Partners4,Partners1)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "Sex")
+```
+
+
+
+```{r,echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Partners4,Partners3)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "Relationship")
+```
+
+
+```{r, echo = FALSE, cache = TRUE, warning = FALSE}
+#anova(Partners4,Partners2)[, c("AIC", "BIC", "deviance", "Chisq", "Df", "Pr(>Chisq)")] %>% as_tibble() %>% replace(is.na(.), NA) %>% kable(caption = "GPA")
+```
+
+
+|               Model|      AIC|      BIC| deviance|   Chisq| Df|Pr(>Chisq)|
+|-------------------:|--------:|--------:|--------:|-------:|--:|---------:|
+|                Full| 162692.8| 162799.1| 162666.8|        |   |          |
+|         Without Sex| 162729.9| 162811.7| 162709.9| 43.0495|  3|         0|
+|Without Relationship| 163438.3| 163520.1| 163418.3| 751.504|  3|         0|
+|         Without GPA| 162760.9| 162842.7| 162740.9|74.03935|  3|         0|
+
+
+This table compares the full model to three different models that excludes the respondent's sex, GPA and Relationship Status. The First Nested F-test suggests statistically significant evidence (Chisq = 43.0495, p-value > 0.001) that sex adds predictive power about a respondent's expected sexual frequency per number of years since their last interview. The second Nested F-test suggests statistically significant evidence (Chisq = 751.504, p-value > 0.001) that relationship status adds predictive power about a respondent's expected sexual frequency per number of years since their last interview. Finally, to address our research question, the last nest Nested F-test suggests statistically significant evidence (Chisq = 74.03935, p-value > 0.001) that High School GPA adds predictive power about a respondent's expected sexual frequency per number of years since their last interview.
+
+The findings from our Nested F-tests mirror the findings of the prior research question and suggest statistically significant evidence that our full model which incorporates sex, relationship status and GPA, all add predictive power. In response to our research question, there is evidence GPA has an association with a respondent's number of sexual partners. Similarly, of the three covariates, the most significant predictor is relationship status, which when added to the model greatly reduces the AIC (163438.3 compared to 162692.8). In addition, the model also suggests evidence that there is a difference in sexual frequency between men and women, and the AIC difference is also relatively smaller (162729.9 compared to 162692.8). This is interesting as the plots displayed that the magnitude of this difference was significantly greater than that displayed in the relationship status differences. Moreover, there is very significant overdispersion (Residual Deviance = 162666.8, Degrees of Freedom = 26309) in this model as well. Considering this, it is also likely that the z-statistics are inflated and that our estimates are skewed, leading to uncertainty about our results.
+
+# 4. Discussion and Conclusion
+
+Our analysis suggests statistically significant evidence that high school GPA has an association with the number of sexual partners over time and, that it is associated with sexual frequency over time. Critically, both models had very significant overdispersion, and while these findings were significant at the 1% percent level, this significance is likely inflated. Furthermore, observing the magnitude of z-values (See Tables 8 and 9 in Appendix) suggests that relationship status is a much more pertinent predictor of both sexual frequency and number of partners. It is unclear if these findings align with evidence in prior literature which suggests lower academic performance is associated with higher levels of sexual behavior among school students (Price and Hyde 2009). However, it is also important to note that those studies discuss college grade points, and the GPA measured is based on high school and does not change over time. However, prior literature has suggested that one of the most prominent predictors of college GPA is high school GPA (Allensworth and Clark 2020). Ultimately, observing this information would still require more research and data on college students. Additionally, analysis also suggests that men have more partners on average than women, until around 30 years old which is consistent with prior findings that men may have more sexual partners (Leigh 1989). Our analysis also suggests that women have sex frequently than men between, There is limited clarity within the literature about this and considering the limitations of our model, it is unclear if this is generalizable. Finally, cohabitating with a partner was also found to be positively associated with sexual frequency, and associated with the number of sexual partners. These findings are with consistent past discussions on sexual patterns and relationships (Leigh 1989).
+
+Considering the uncertainty in our study, it is important to note several limitations. Firstly, the data was self-reported, so there are many possibilities for individuals to not accurately report. This has been noted to be common in prior studies of sexual self-reporting surveys for several speculated reasons (Hallfors et al. 2002). The self-reporting issues are particularly evident in the sexual frequency data, where the distribution indicates clear spikes in numbers that are multiples of 100 (See Figure 5 in Appendix). Considering sexual frequency is likely not something that people keep track of explicitly, and the variation in the years between interviews on this questionnaire, it is probable that the variation in sexual frequency is underreported. There were also several significant outliers within the data for sexual partners, with the highest reported being 1000. Due their magnitude, we decided to remove them from the analysis, which could potentially misrepresent our results. Finally, 5,800 respondents did not have a response to the sex-based questions and had to be dropped from the study. Considering the private nature of reporting on sexual behavior, addressing this particular challenge is difficult to overcome. It is unlikely that this was a representative subset of the population, but we have no information by which to account for this. There was a notably large number of 1s reported, and it is also likely for the sexual frequency model that this is related to underreporting. We suspect that these are among the causes for the observed overdispersion. Although this is computationally challenging with the multi-level structure, the overdispersion suggests a negative binomial may yield more precise results. These limitations could be biasing the effects and overestimating the associations of different variables, including GPA. Therefore, the results of this study may not be strictly generalizable, and further study is encouraged.
+
+There are several avenues for future studies about predictors and trends in sexual relationships over time. Furthermore, exploring why academic achievement might be associated with increased sexual practices can reveal any confounding variables picked up by GPA in this study that might truly explain the results seen. In particular, explorations into the effects of cultural shifts on perceptions of sexual relationships can reveal insights into the continued developments of social-sexual networks, and answer questions about the types of sexual relationships young people are exploring. In addition, gathering more precise longitudinal data on sexual relationships with consistent partner interviews can help overcome the data limitations faced in this study. Asking further questions about sexual and relationship preferences, or personal schedules can indicate insights into how work-life balance factors into sexual decisions. It can also account for changing and varying preferences for relationships beyond monogamous ones. In addition, specifications for sexuality can also provide more representative insight into sexual trends. Moreover, an exploration into how sexual relationships differ following shifts in social policy, rhetoric, or economic conditions can reveal insight into the private implications of public policy and social change. Understanding trends in sexual behavior, between different genders, beyond just the male and female binary, can also reveal information about variations in sexual practices among different genders. Fundamentally,further exploration of this topic can establish new conversations about sexual relationships, and they can help sociologists and sexual health researchers gain a more nuanced understanding of an important and evolving sociological conversation.
+
+
+
+
+# 5. Sources
+
+Allensworth, Elaine M., and Kallie Clark. 2020. “High School GPAs and
+ACT Scores as Predictors of College Completion: Examining Assumptions
+About Consistency Across High Schools.” Educational Researcher 49 (3):
+198–211. <https://doi.org/10.3102/0013189X20902110>.
+
+Fielder, Robyn L., and Michael P. Carey. 2010. “Predictors and
+Consequences of Sexual ‘Hookups’ Among College Students: A Short-Term
+Prospective Study.” Archives of Sexual Behavior 39 (5): 1105–19.
+<https://doi.org/10.1007/s10508-008-9448-4>.
+
+Frisco, Michelle L. 2008. “Adolescents’ Sexual Behavior and Academic
+Attainment.” Sociology of Education 81 (3): 284–311.
+<https://doi.org/10.1177/003804070808100304>.
+
+Hallfors, Denise, Jack L. Vevea, Bonita Iritani, HyunSan Cho, Shereen
+Khatapoush, and Leonard Saxe. 2002. “Truancy, Grade Point Average, and
+Sexual Activity: A Meta-Analysis of Risk Indicators for Youth Substance
+Use.” Journal of School Health 72 (5): 205–11.
+<https://doi.org/10.1111/j.1746-1561.2002.tb06548.x>.
+
+Kan, Marni L., Yen-hsin Alice Cheng, Nancy S. Landale, and Susan M.
+McHale. 2010. “Longitudinal Predictors of Change in Number of Sexual
+Partners across Adolescence and Early Adulthood.” Journal of Adolescent
+Health 46 (1): 25–31.
+<https://doi.org/10.1016/j.jadohealth.2009.05.002>.
+
+Lei, Lei, and Scott J. South. 2021. “Explaining the Decline in Young
+Adult Sexual Activity in the United States.” Journal of Marriage and
+Family 83 (1): 280–95. <https://doi.org/10.1111/jomf.12723>.
+
+Leigh, Barbara Critchlow. 1989. “Reasons for Having and Avoiding Sex:
+Gender, Sexual Orientation, and Relationship to Sexual Behavior.” The
+Journal of Sex Research 26 (2): 199–209.
+<https://doi.org/10.1080/00224498909551506>.
+
+Price, Myeshia N., and Janet Shibley Hyde. 2009. “When Two Isn’t Better
+Than One: Predictors of Early Sexual Activity in Adolescence Using a
+Cumulative Risk Model.” Journal of Youth and Adolescence 38 (8):
+1059–71. <https://doi.org/10.1007/s10964-008-9351-2>.
+
+Tillman, Kathryn Harker, Karin L. Brewster, and Giuseppina Valle Holway.
+2019. “Sexual and Romantic Relationships in Young Adulthood.” Annual
+Review of Sociology 45 (Volume 45, 2019): 133–53.
+<https://doi.org/10.1146/annurev-soc-073018-022625>.
+
+Twenge, Jean M., Ryne A. Sherman, and Brooke E. Wells. 2015. “Changes in
+American Adults’ Sexual Behavior and Attitudes, 1972–2012.” Archives of
+Sexual Behavior 44 (8): 2273–85.
+<https://doi.org/10.1007/s10508-015-0540-2>.
+
+Our data was collected from the National Longitudinal Survey of Youth--
+1997. This survey tracked individuals born from 1980 to 1984.
+<https://www.nlsinfo.org/content/cohorts/nlsy97>
+
+Hlavac, Marek (2022). stargazer: Well-Formatted Regression and Summary
+Statistics Tables. R package version 5.2.3.
+<https://CRAN.R-project.org/package=stargazer>
+
+# 6. Appendix
+
+```{r,echo = FALSE, cache = TRUE, warning = FALSE}
+Partner_model <-read_rds("~/Stats_316_F24/Project/DR_MB/partners4.rds")
+
+summary(Partner_model)$coefficients %>% as.data.frame()  %>%  kable(escape = TRUE, caption = "Composite Model 2 Fixed Effects Summary")
+
+Partner_model %>% VarCorr() %>% as.data.frame()  %>% kable(escape = TRUE, caption = "Composite Model 2 Random Effects Summary") 
+```
+This table represents our Full Model predicting the number of partners a respondent reported since their last interview.
+
+```{r,echo = FALSE, cache = TRUE, warning = FALSE}
+frequency_model <-read_rds("~/Stats_316_F24/Project/DR_MB/sex4.rds")
+
+summary(frequency_model)$coefficients %>% as.data.frame()  %>%
+  kable(escape = TRUE, caption = "Composite Model 1 Fixed Effects Summary")
+
+frequency_model %>% VarCorr() %>% as.data.frame() %>%
+  kable(escape = TRUE, caption = "Composite Model 1 Random Effects Summary")
+```
+This table represents our Full Model predicting the number of times a respondent had sex since their last interview.
+
+
+
+```{r,  Sex Count by Sex (and year) w/ vert lines, fig.height=5, fig.width=10, echo = FALSE, warning = FALSE, message = FALSE}
+nls_long %>% ggplot() + geom_density(aes(x = SEX_SINCE_DLI / interview_dist, color = Sex)) + 
+  scale_x_continuous(
+    breaks = seq(100, 1000, by = 100),  # Set breaks at multiples of 100
+    labels = seq(100, 1000, by = 100)   # Set labels at multiples of 100
+  ) +
+  theme_minimal() +
+theme(panel.grid.major.x = element_line(color = "darkgray", linewidth = 0.5)) +
+labs(title = "Sex per year since DLI by sex (M/F)",
+     x = "Sexual Encounters since DLI",
+     y = "Density",
+     color = "Sex",
+    caption = "Data Source: National Longitudinal Study of Youth in 1997")
+```
+
+Figure 5: This density chart of Sex since the Date of the Last
+Interview, broken up by sex (male and female), suggests that respondents
+reported the number of times they had sex as multiples of 100, indicated
+by the gridlines. Implications from this are that respondents likely
+rounded their sexual frequency. Data are from the National Longitudinal
+Study of Youth in 1997 and were collected from interviews over 25 years,
+with 4088 female respondents and 4250 male respondents.
+
+```{r, Summary by Favstats 3: Partners, echo = FALSE, warning = FALSE}
+
+nls_SSD_offset %>%
+  mutate(RoundedGPA = round(Avg_GPA, 0)) %>%
+  ungroup() %>%
+  group_by(year) %>%
+  summarise(
+    `Mean Annual Partners` = mean(NUM_PARTNERS_SINCE_DLI / interview_dist),
+    `Median Annual Partners` = median(NUM_PARTNERS_SINCE_DLI / interview_dist),
+    `St. Dev Annual Partners` = sd(NUM_PARTNERS_SINCE_DLI / interview_dist)
+  ) %>%
+  pivot_longer(cols = c("Mean Annual Partners", "Median Annual Partners", "St. Dev Annual Partners"), 
+               names_to = "Statistic", 
+               values_to = "Value") %>%
+  ggplot(aes(x = year, y = Value, color = Statistic)) +  
+  geom_line() + 
+  scale_fill_manual(
+    values = c("St. Dev Annual Partners" = "blue",  
+               "Mean Annual Partners" = "red",     
+               "Median Annual Partners" = "green"),  
+    name = "Statistic",  
+    labels = c("St. Dev Annual Partners", "Mean Annual Partners", "Median Annual Partners")
+  ) + 
+  theme_minimal() +
+  labs(
+    title = "Annual Sexual Partners Metrics by Year",
+    x = "Year",
+    y = "Number of Annual Sexual Partners",
+    caption = "Data Source: National Longitudinal Study of Youth in 1997"
+  )
+```
+
+Figure 6: The mean and variance in sexual relationships over time appear to differ until around 2010.Data are from the National Longitudinal Study of Youth in 1997 and were collected from interviews over 25 years,
+with 4088 female respondents and 4250 male respondents.
+
+```{r Variable Summary Tables: Sex partners 1, echo = FALSE}
+SumPSLI(Marriage_Status, "Marriage Status")
+```
+
+Table 8 suggests for the different marriage statuses, those who are
+living with a partner and those who were never married appear to have
+more sexual partners on average. These results differ slightly from the
+sexual frequency predictions indicated in Table One.
+
+
+```{r Variable Summary Tables: Sex Count 6, echo = FALSE}
+SumSSD(Marriage_Status, "Marriage Status") 
+```
+
+Table 9 suggests for the different marriage statuses, those who are
+living with a partner or seeing someone are more likely to have a higher
+average sexual frequency. This justified our use of a binary
+relationship status variable rather than each of the different marriage
+status categories.
+
+This is the summary of the number of sexual encounters for each year of
+the survey.
+
+```{r echo = FALSE}
+SumSSD(year, "year")
+```
+
+This is the summary of the number of sexual partners for each year of
+the survey.
+
+```{r echo = FALSE, warning = FALSE}
+SumPSLI(year, "year")
+```
