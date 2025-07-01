@@ -1,5 +1,5 @@
 # Stat316-Final-Project
-Final project for Advanced Statistical Modelling. 
+Final project for Advanced Statistical Modelling. My good friend and classmate Donovan Roddy and I worked to investigate what associations may exist between adolescent academic performance, such as high school or college GPA and standardized test scores, and sexual behaviors throughout young adulthood and later in life. To address these questions, we performed multilevel Poisson regression on data from the National Longitudinal Study of Youth from 1997 (NSRL97).
 
 ## Deliverable
 
@@ -32,6 +32,6 @@ This research was conducted in RStudio, using packages _tidyverse_, _mosaic_, _k
 
 ## Author Contributions
 
-This report was written with Donovan Roddy, a classmate and friend. We were both deeply involved in every part of the assignment, but I took the lead on cleaning the data, and Donovan did a little bit more of the initial modelling. I modelled and wrote up most of Section 3.1 (Sex frequency), while Donovan did Section 3.2 (Number of sexual partners). 
+Donovan and I were both deeply involved in every part of the assignment, but I took the lead on cleaning the data, and Donovan did a little bit more of the initial modelling. I modelled and wrote up most of Section 3.1 (Sex frequency), while Donovan did Section 3.2 (Number of sexual partners). 
 
 There was minimal use of generative AI in the modelling and code-writing parts of this assingment, but no AI was used for the writing of the report. 
