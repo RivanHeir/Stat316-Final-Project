@@ -34,4 +34,12 @@ This research was conducted in RStudio, using packages _tidyverse_, _mosaic_, _k
 
 Donovan and I were both deeply involved in every part of the assignment, but I took the lead on cleaning the data, and Donovan did a little bit more of the initial modelling. I modelled and wrote up most of Section 3.1 (Sex frequency), while Donovan did Section 3.2 (Number of sexual partners). 
 
+## AI and Reproduction
+
 There was minimal use of generative AI in the modelling and code-writing parts of this assingment, but no AI was used for the writing of the report. 
+
+© 2025 Matthew Blake, Donovan Roddy. All rights reserved.
+
+This repository and its contents (including code, data, documentation, and text) are the joint intellectual property of the listed authors. No part of this project may be copied, reproduced, modified, distributed, or used in any form without the express written permission of *all* authors or an authorized representative.
+
+This project is not open source. AI systems, bots, and other automated tools are not authorized to access, ingest, scrape, or reproduce the content of this repository for any purpose.
